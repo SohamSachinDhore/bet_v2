@@ -289,6 +289,16 @@ def create_working_main_gui():
         """Handle input text changes"""
         validate_input()
     
+    def on_submit_focus():
+        """Visual feedback when submit button gains focus"""
+        # Change button appearance to show focus
+        dpg.bind_item_theme("submit_btn", "focused_button_theme")
+    
+    def on_submit_blur():
+        """Visual feedback when submit button loses focus"""
+        # Reset button appearance
+        dpg.bind_item_theme("submit_btn", "default_button_theme")
+    
     def submit_data():
         """Submit data to database"""
         global customers
@@ -410,9 +420,11 @@ def create_working_main_gui():
                         
                         dpg.set_value("status_text", f"Success: {entries_saved} entries saved (simple mode)!")
                     
-                    # Clear input
+                    # Clear input and reset focus
                     dpg.set_value("input_area", "")
                     validate_input()
+                    on_submit_blur()  # Remove focus indicator
+                    dpg.focus_item("input_area")  # Return focus to input
                     
                 except Exception as e:
                     dpg.set_value("status_text", f"Database error: {e}")
@@ -428,6 +440,8 @@ def create_working_main_gui():
         dpg.set_value("input_area", "")
         validate_input()
         dpg.set_value("status_text", "Data cleared")
+        on_submit_blur()  # Remove focus indicator
+        dpg.focus_item("input_area")  # Return focus to input
     
     def add_customer():
         """Add new customer"""
@@ -2225,23 +2239,82 @@ def create_working_main_gui():
     
     # Configure larger font for better readability
     with dpg.font_registry():
-        # Try to use system font, fallback to built-in if not available
-        try:
-            # For macOS, try Helvetica
-            default_font = dpg.add_font("/System/Library/Fonts/Helvetica.ttc", 18)
-            header_font = dpg.add_font("/System/Library/Fonts/Helvetica.ttc", 20)
-        except:
+        # Cross-platform font loading
+        def get_system_fonts():
+            """Get platform-specific font paths"""
+            import platform
+            import os
+            
+            system = platform.system()
+            font_paths = []
+            
+            if system == "Darwin":  # macOS
+                font_paths = [
+                    "/System/Library/Fonts/Helvetica.ttc",
+                    "/System/Library/Fonts/Arial.ttf",
+                    "/System/Library/Fonts/Arial Unicode.ttf",
+                    "/Library/Fonts/Arial.ttf"
+                ]
+            elif system == "Windows":
+                windows_fonts = os.environ.get('WINDIR', 'C:\\Windows')
+                font_paths = [
+                    os.path.join(windows_fonts, "Fonts", "arial.ttf"),
+                    os.path.join(windows_fonts, "Fonts", "calibri.ttf"),
+                    os.path.join(windows_fonts, "Fonts", "segoeui.ttf"),
+                    "C:\\Windows\\Fonts\\arial.ttf",
+                    "C:\\Windows\\Fonts\\calibri.ttf"
+                ]
+            elif system == "Linux":
+                font_paths = [
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/TTF/arial.ttf",
+                    "/usr/share/fonts/truetype/ubuntu-font-family/Ubuntu-R.ttf"
+                ]
+            
+            # Filter to existing files
+            return [path for path in font_paths if os.path.exists(path)]
+        
+        # Try to load system fonts
+        available_fonts = get_system_fonts()
+        default_font = None
+        header_font = None
+        
+        for font_path in available_fonts:
             try:
-                # Fallback to Arial if available
-                default_font = dpg.add_font("/System/Library/Fonts/Arial.ttf", 18)
-                header_font = dpg.add_font("/System/Library/Fonts/Arial.ttf", 20)
-            except:
-                # Use DearPyGui's built-in font with scaling
-                default_font = dpg.add_font(None, 18)
-                header_font = dpg.add_font(None, 20)
+                default_font = dpg.add_font(font_path, 18)
+                header_font = dpg.add_font(font_path, 20)
+                print(f"Successfully loaded font: {font_path}")
+                break
+            except Exception as e:
+                print(f"Failed to load font {font_path}: {e}")
+                continue
+        
+        # Fallback to built-in font if no system font works
+        if default_font is None:
+            print("Using built-in DearPyGui font")
+            default_font = dpg.add_font(None, 18)
+            header_font = dpg.add_font(None, 20)
     
     # Bind the default font
     dpg.bind_font(default_font)
+    
+    # Create button themes for focus indication
+    with dpg.theme() as default_button_theme:
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (51, 51, 55, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (60, 60, 65, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 40, 45, 255))
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 5)
+    
+    with dpg.theme() as focused_button_theme:
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (40, 100, 200, 255))  # Blue for focused
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 110, 210, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (30, 90, 190, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Border, (255, 255, 255, 255))  # White border
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 5)
+            dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 2)  # Visible border
     
     # Create main window
     with dpg.window(label="RickyMama Data Entry System", tag="main_window"):
@@ -2338,14 +2411,30 @@ def create_working_main_gui():
                 dpg.add_separator()
                 dpg.add_spacer(height=3)
                 
+                def on_input_focus():
+                    """Remove focus indicator from submit button when input gains focus"""
+                    on_submit_blur()
+                
                 dpg.add_input_text(
                     tag="input_area",
                     multiline=True,
                     width=-1,
                     height=400,
                     hint="Enter your data here...\\n\\nSupported formats:\\n- PANA: 128/129/120 = 100\\n- Type: 1SP=100, 5DP=200\\n- Time: 1=100, 2 4 6=300\\n- Multi: 38x700, 83x500\\n- Jodi: 22-24-26\\n42-44-46=500",
-                    callback=on_input_change
+                    callback=on_input_change,
+                    tab_input=False  # Disable tab character insertion
                 )
+                
+                # Add keyboard handler for Tab navigation with visual feedback
+                def handle_tab_key():
+                    if dpg.is_item_focused("input_area"):
+                        dpg.focus_item("submit_btn")
+                        on_submit_focus()  # Add visual feedback
+                
+                with dpg.handler_registry():
+                    dpg.add_key_press_handler(dpg.mvKey_Tab, callback=handle_tab_key)
+                    # Add handler to detect when clicking elsewhere
+                    dpg.add_mouse_click_handler(callback=lambda: on_submit_blur() if not dpg.is_item_focused("submit_btn") else None)
                 
                 dpg.add_spacer(height=3)
                 dpg.add_text("Status: Ready", tag="validation_text", color=[150, 150, 150])
@@ -2403,9 +2492,14 @@ def create_working_main_gui():
         with dpg.group(horizontal=True):
             dpg.add_button(label="Preview", callback=validate_input, width=120, height=35)
             dpg.add_spacer(width=15)
-            dpg.add_button(label="Submit", callback=submit_data, width=120, height=35, tag="submit_btn")
+            submit_btn = dpg.add_button(label="Submit", callback=submit_data, width=120, height=35, tag="submit_btn")
+            dpg.bind_item_theme("submit_btn", default_button_theme)  # Set default theme
             dpg.add_spacer(width=15)
             dpg.add_button(label="Clear", callback=clear_data, width=120, height=35)
+            
+            # Add Enter key handler for submit button
+            with dpg.handler_registry():
+                dpg.add_key_press_handler(dpg.mvKey_Return, callback=lambda: submit_data() if dpg.is_item_focused("submit_btn") else None)
             
             dpg.add_spacer(width=30)
             
