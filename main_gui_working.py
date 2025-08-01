@@ -1773,21 +1773,52 @@ def create_working_main_gui():
                         try:
                             time_data = db_manager.get_time_table_by_bazar_date(bazar_name, date_str)
                             
+                            # Initialize column totals (excluding jodi totals)
+                            column_totals = {i: 0 for i in range(10)}  # Columns 0-9
+                            grand_total = 0
+                            filtered_entries = []
+                            
                             if time_data:
+                                # First pass: filter data and calculate totals
                                 for entry in time_data:
                                     # Filter by customer if specific customer selected
                                     if customer_value == "All Customers" or entry['customer_name'] == customer_value:
-                                        with dpg.table_row(parent="time_table"):
-                                            # Apply color coding based on commission type
-                                            customer_color = get_customer_name_color(entry['customer_name'])
-                                            dpg.add_text(entry['customer_name'], color=customer_color)
-                                            dpg.add_text(bazar_name)
-                                            # Columns 1-9, then 0 (as per table header order)
-                                            for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]:
-                                                value = entry[f'col_{i}'] if entry[f'col_{i}'] > 0 else "-"
-                                                dpg.add_text(str(value))
-                                            dpg.add_text(f"{entry['total']:,}")
-                                            dpg.add_text(entry['updated_at'] or entry['created_at'])
+                                        filtered_entries.append(entry)
+                                        # Add to column totals (only from time table data, not jodi)
+                                        for i in range(10):
+                                            column_value = entry[f'col_{i}'] or 0
+                                            column_totals[i] += column_value
+                                        grand_total += entry['total'] or 0
+                                
+                                # Second pass: display the filtered entries
+                                for entry in filtered_entries:
+                                    with dpg.table_row(parent="time_table"):
+                                        # Apply color coding based on commission type
+                                        customer_color = get_customer_name_color(entry['customer_name'])
+                                        dpg.add_text(entry['customer_name'], color=customer_color)
+                                        dpg.add_text(bazar_name)
+                                        # Columns 1-9, then 0 (as per table header order)
+                                        for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]:
+                                            value = entry[f'col_{i}'] if entry[f'col_{i}'] > 0 else "-"
+                                            dpg.add_text(str(value))
+                                        dpg.add_text(f"{entry['total']:,}")
+                                        dpg.add_text(entry['updated_at'] or entry['created_at'])
+                                
+                                # Add time table column totals row (before jodi totals)
+                                with dpg.table_row(parent="time_table"):
+                                    dpg.add_text("TIME TOTALS", color=(46, 204, 113, 255))  # Green color
+                                    dpg.add_text(bazar_name, color=(46, 204, 113, 255))
+                                    # Display time table totals for columns 1-9, then 0
+                                    for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]:
+                                        total = column_totals.get(i, 0)
+                                        if total > 0:
+                                            dpg.add_text(f"{total:,}", color=(46, 204, 113, 255))
+                                        else:
+                                            dpg.add_text("-", color=(108, 117, 125, 255))
+                                    # Grand total of all time table columns
+                                    dpg.add_text(f"{grand_total:,}", color=(46, 204, 113, 255))
+                                    dpg.add_text("Calculated", color=(46, 204, 113, 255))
+                                    
                             else:
                                 # Show empty row if no data
                                 with dpg.table_row(parent="time_table"):
@@ -1819,7 +1850,9 @@ def create_working_main_gui():
                         dpg.add_text(f"{grand_total:,}", color=(255, 193, 7, 255))
                         dpg.add_text("Live", color=(255, 193, 7, 255))
                         
-                dpg.set_value("status_text", f"Time table loaded for {date_str} (includes Jodi totals)")
+                # Update status with totals information
+                entries_count = len(filtered_entries) if 'filtered_entries' in locals() else 0
+                dpg.set_value("status_text", f"Time table loaded for {date_str} | {entries_count} entries | Time total: ₹{grand_total:,} | Includes separate Jodi totals")
         except Exception as e:
             dpg.set_value("status_text", f"Error refreshing time table: {e}")
     
