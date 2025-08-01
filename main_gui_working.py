@@ -66,7 +66,7 @@ def create_working_main_gui():
             # Find customer in the customers list
             for customer in customers:
                 if customer['name'] == customer_name:
-                    commission_type = customer.get('commission_type', 'commission')
+                    commission_type = customer['commission_type'] if 'commission_type' in customer.keys() else 'commission'
                     if commission_type == 'commission':
                         return (52, 152, 219, 255)  # Blue
                     else:
@@ -100,32 +100,19 @@ def create_working_main_gui():
             
             # Use advanced parsing system
             try:
-                from src.business.data_processor import DataProcessor
-                from src.business.calculation_engine import CalculationEngine
+                from src.business.calculation_engine import CalculationEngine, CalculationContext
                 from src.parsing.mixed_input_parser import MixedInputParser
                 from datetime import date
                 
-                # Create processor with full parsing system
-                processor = DataProcessor(db_manager)
-                
-                # Test parsing without saving
-                from src.business.data_processor import ProcessingContext
-                test_context = ProcessingContext(
-                    customer_name=dpg.get_value("customer_combo"),
-                    bazar=dpg.get_value("bazar_combo"),
-                    entry_date=date.today(),
-                    input_text=input_text,
-                    validate_references=True,
-                    auto_create_customer=False
-                )
+                # Create parser and calculation engine directly
+                mixed_parser = MixedInputParser()
+                calc_engine = CalculationEngine()
                 
                 # Parse input to get preview
-                mixed_parser = processor.mixed_parser
                 parsed_result = mixed_parser.parse(input_text)
                 
                 if not parsed_result.is_empty:
                     # Calculate totals
-                    calc_engine = processor.calculation_engine
                     calc_result = calc_engine.calculate_total(parsed_result)
                     total_entries = (len(parsed_result.pana_entries or []) + 
                                    len(parsed_result.type_entries or []) + 
@@ -328,13 +315,14 @@ def create_working_main_gui():
                     
                     # Parse input using advanced parsing system
                     try:
-                        from src.business.data_processor import DataProcessor
+                        from src.business.calculation_engine import CalculationEngine, CalculationContext
+                        from src.parsing.mixed_input_parser import MixedInputParser
                         from datetime import date
                         
-                        # Create processor with full parsing system
-                        processor = DataProcessor(db_manager)
+                        # Create parser and calculation engine directly
+                        mixed_parser = MixedInputParser()
+                        calc_engine = CalculationEngine()
                         
-                        # Create processing context
                         # Get date from date display field
                         date_str = dpg.get_value("date_display")
                         try:
@@ -342,22 +330,38 @@ def create_working_main_gui():
                         except:
                             entry_date = date.today()
                         
-                        from src.business.data_processor import ProcessingContext
-                        context = ProcessingContext(
-                            customer_name=customer_name,
-                            bazar=bazar_name,
-                            entry_date=entry_date,
-                            input_text=input_text,
-                            validate_references=True,
-                            auto_create_customer=True
-                        )
+                        # Parse the input
+                        parsed_result = mixed_parser.parse(input_text)
                         
-                        # Process the input
-                        result = processor.process_mixed_input(context)
-                        
-                        if result.success:
-                            total_entries = result.pana_count + result.type_count + result.time_count + result.multi_count + result.direct_count + getattr(result, 'jodi_count', 0)
-                            total_value = result.total_value or 0
+                        if not parsed_result.is_empty:
+                            # Create calculation context
+                            calc_context = CalculationContext(
+                                customer_id=customer_id,
+                                customer_name=customer_name,
+                                entry_date=entry_date,
+                                bazar=bazar_name,
+                                source_data=parsed_result
+                            )
+                            
+                            # Calculate business totals
+                            business_calc = calc_engine.calculate(calc_context)
+                            
+                            # Save universal log entries to database
+                            total_entries = 0
+                            for entry in business_calc.universal_entries:
+                                db_manager.add_universal_log_entry({
+                                    'customer_id': entry.customer_id,
+                                    'customer_name': entry.customer_name,
+                                    'entry_date': entry.entry_date,
+                                    'bazar': entry.bazar,
+                                    'number': entry.number,
+                                    'value': entry.value,
+                                    'entry_type': entry.entry_type.value,
+                                    'source_line': entry.source_line
+                                })
+                                total_entries += 1
+                            
+                            total_value = business_calc.grand_total
                             
                             dpg.set_value("status_text", f"✅ Success: {total_entries} entries saved! Total: ₹{total_value:.2f}")
                             
@@ -382,9 +386,7 @@ def create_working_main_gui():
                             except:
                                 pass
                         else:
-                            error_message = f"❌ Processing failed: {result.error_message}"
-                            if result.validation_errors:
-                                error_message += f"\nValidation errors: {', '.join(result.validation_errors)}"
+                            error_message = "❌ Processing failed: No valid entries found in input"
                             dpg.set_value("status_text", error_message)
                             return
                         
@@ -738,6 +740,24 @@ def create_working_main_gui():
         """Create separate table window with all data tables"""
         if dpg.does_item_exist("table_window"):
             dpg.show_item("table_window")
+            # Auto-refresh tables with current date
+            from datetime import date
+            today = date.today().isoformat()
+            
+            # Set default dates for all table filters
+            if dpg.does_item_exist("pana_date_display"):
+                dpg.set_value("pana_date_display", today)
+            if dpg.does_item_exist("time_date_display"):
+                dpg.set_value("time_date_display", today)
+            if dpg.does_item_exist("jodi_date_display"):
+                dpg.set_value("jodi_date_display", today)
+            if dpg.does_item_exist("summary_date_display"):
+                dpg.set_value("summary_date_display", today)
+            
+            # Refresh all tables
+            refresh_customers_table()
+            refresh_universal_table()
+            refresh_summary_table()
             dpg.focus_item("table_window")
             return
         
@@ -897,8 +917,9 @@ def create_working_main_gui():
             )
             with dpg.tooltip("pana_upper_value_filter"):
                 dpg.add_text("Filter upper section (above separator)")
-                dpg.add_text("Shows only numbers with values > filter")
-                dpg.add_text("Set to 0 to show all numbers")
+                dpg.add_text("Hides values ≤ filter threshold")
+                dpg.add_text("Shows (value - filter) for values > filter")
+                dpg.add_text("Set to 0 to show original values")
             
             dpg.add_spacer(width=10)
             
@@ -913,8 +934,9 @@ def create_working_main_gui():
             )
             with dpg.tooltip("pana_lower_value_filter"):
                 dpg.add_text("Filter lower section (below separator)")
-                dpg.add_text("Shows only numbers with values > filter")
-                dpg.add_text("Set to 0 to show all numbers")
+                dpg.add_text("Hides values ≤ filter threshold")
+                dpg.add_text("Shows (value - filter) for values > filter")
+                dpg.add_text("Set to 0 to show original values")
             
             dpg.add_spacer(width=20)
             
@@ -1332,8 +1354,45 @@ def create_working_main_gui():
     
     def open_table_window():
         """Open separate table window"""
+        from datetime import date
+        today = date.today().isoformat()
+        
         create_table_window()
-        dpg.set_value("status_text", "Table window opened")
+        
+        # Set default filters and refresh tables that don't need filters
+        try:
+            # Set today's date for all date pickers
+            if dpg.does_item_exist("pana_date_display"):
+                dpg.set_value("pana_date_display", today)
+            if dpg.does_item_exist("time_date_display"):
+                dpg.set_value("time_date_display", today)
+            if dpg.does_item_exist("jodi_date_display"):
+                dpg.set_value("jodi_date_display", today)
+            if dpg.does_item_exist("summary_date_display"):
+                dpg.set_value("summary_date_display", today)
+                
+            # Set default bazars to first available bazar
+            if bazars and len(bazars) > 0:
+                default_bazar = bazars[0]['display_name']
+                if dpg.does_item_exist("pana_bazar_filter"):
+                    dpg.set_value("pana_bazar_filter", default_bazar)
+                if dpg.does_item_exist("time_bazar_filter"):
+                    dpg.set_value("time_bazar_filter", default_bazar)
+                if dpg.does_item_exist("jodi_bazar_filter"):
+                    dpg.set_value("jodi_bazar_filter", default_bazar)
+            
+            # Set default customer to "All Customers"
+            if dpg.does_item_exist("time_customer_filter"):
+                dpg.set_value("time_customer_filter", "All Customers")
+            if dpg.does_item_exist("jodi_customer_filter"):
+                dpg.set_value("jodi_customer_filter", "All Customers")
+            if dpg.does_item_exist("summary_customer_filter"):
+                dpg.set_value("summary_customer_filter", "All Customers")
+                
+        except Exception as e:
+            print(f"Warning: Could not set default filters: {e}")
+        
+        dpg.set_value("status_text", f"Table window opened with date {today}")
     
     def open_export_dialog():
         """Open export dialog"""
@@ -1425,7 +1484,7 @@ def create_working_main_gui():
                             dpg.add_text(str(customer['id']))
                             
                             # Show commission type and apply color coding
-                            commission_type = customer.get('commission_type', 'commission')
+                            commission_type = customer['commission_type'] if 'commission_type' in customer.keys() else 'commission'
                             display_type = "Commission" if commission_type == 'commission' else "Non-Commission"
                             
                             # Color coding: Blue for Commission, Orange for Non-Commission
@@ -1584,16 +1643,21 @@ def create_working_main_gui():
                                 # Number cell - always show
                                 dpg.add_text(str(number))
                                 
-                                # Value cell - apply upper section filter
-                                if upper_filter > 0 and value > 0 and value <= upper_filter:
-                                    # Hide value if it doesn't pass filter
+                                # Value cell - apply upper section filter with subtraction
+                                if upper_filter > 0 and value <= upper_filter:
+                                    # Hide value if it doesn't exceed filter (including zeros)
                                     dpg.add_text("", color=(108, 117, 125, 255))  # Empty value cell
                                 else:
-                                    # Show value normally
-                                    if value > 0:
-                                        dpg.add_text(str(value), color=(39, 174, 96, 255))  # Green for non-zero
-                                    else:
-                                        dpg.add_text("0", color=(108, 117, 125, 255))  # Gray for zero
+                                    # Show value with filter subtracted (if filter > 0)
+                                    if upper_filter > 0 and value > upper_filter:
+                                        display_value = value - upper_filter
+                                        dpg.add_text(str(display_value), color=(39, 174, 96, 255))  # Green for filtered value
+                                    elif upper_filter == 0:
+                                        # No filter - show original value
+                                        if value > 0:
+                                            dpg.add_text(str(value), color=(39, 174, 96, 255))  # Green for non-zero
+                                        else:
+                                            dpg.add_text("0", color=(108, 117, 125, 255))  # Gray for zero
                     
                     # Add separator row (empty row)
                     with dpg.table_row(parent="pana_grid_table"):
@@ -1609,29 +1673,36 @@ def create_working_main_gui():
                                 # Number cell - always show
                                 dpg.add_text(str(number))
                                 
-                                # Value cell - apply lower section filter
-                                if lower_filter > 0 and value > 0 and value <= lower_filter:
-                                    # Hide value if it doesn't pass filter
+                                # Value cell - apply lower section filter with subtraction
+                                if lower_filter > 0 and value <= lower_filter:
+                                    # Hide value if it doesn't exceed filter (including zeros)
                                     dpg.add_text("", color=(108, 117, 125, 255))  # Empty value cell
                                 else:
-                                    # Show value normally
-                                    if value > 0:
-                                        dpg.add_text(str(value), color=(39, 174, 96, 255))  # Green for non-zero
-                                    else:
-                                        dpg.add_text("0", color=(108, 117, 125, 255))  # Gray for zero
+                                    # Show value with filter subtracted (if filter > 0)
+                                    if lower_filter > 0 and value > lower_filter:
+                                        display_value = value - lower_filter
+                                        dpg.add_text(str(display_value), color=(39, 174, 96, 255))  # Green for filtered value
+                                    elif lower_filter == 0:
+                                        # No filter - show original value
+                                        if value > 0:
+                                            dpg.add_text(str(value), color=(39, 174, 96, 255))  # Green for non-zero
+                                        else:
+                                            dpg.add_text("0", color=(108, 117, 125, 255))  # Gray for zero
                     
                     # Add summary information with filter status
                     total_numbers = len(upper_section) * 10 + len(lower_section) * 10  # 220 total
                     non_zero_count = len([v for v in pana_values.values() if v > 0])
-                    total_value = sum(pana_values.values())
+                    original_total_value = sum(pana_values.values())
                     
-                    # Count visible values for each section (numbers always visible)
+                    # Count visible values and calculate filtered totals for each section
                     upper_visible_values = 0
                     lower_visible_values = 0
                     upper_total_values = 0
                     lower_total_values = 0
+                    upper_filtered_total = 0
+                    lower_filtered_total = 0
                     
-                    # Count upper section values
+                    # Count upper section values and calculate filtered total
                     for row_numbers in upper_section:
                         for number in row_numbers:
                             value = pana_values.get(number, 0)
@@ -1639,8 +1710,13 @@ def create_working_main_gui():
                                 upper_total_values += 1
                                 if upper_filter == 0 or value > upper_filter:
                                     upper_visible_values += 1
+                                    # Add to filtered total (with subtraction if filter applied)
+                                    if upper_filter > 0 and value > upper_filter:
+                                        upper_filtered_total += (value - upper_filter)
+                                    elif upper_filter == 0:
+                                        upper_filtered_total += value
                     
-                    # Count lower section values
+                    # Count lower section values and calculate filtered total
                     for row_numbers in lower_section:
                         for number in row_numbers:
                             value = pana_values.get(number, 0)
@@ -1648,15 +1724,26 @@ def create_working_main_gui():
                                 lower_total_values += 1
                                 if lower_filter == 0 or value > lower_filter:
                                     lower_visible_values += 1
+                                    # Add to filtered total (with subtraction if filter applied)
+                                    if lower_filter > 0 and value > lower_filter:
+                                        lower_filtered_total += (value - lower_filter)
+                                    elif lower_filter == 0:
+                                        lower_filtered_total += value
+                    
+                    # Calculate display total (after filter subtraction)
+                    display_total_value = upper_filtered_total + lower_filtered_total
                     
                     filter_status = ""
                     if upper_filter > 0 or lower_filter > 0:
-                        filter_status = f" | Visible values: Upper {upper_visible_values}/{upper_total_values}, Lower {lower_visible_values}/{lower_total_values}"
+                        filter_status = f" | Visible: Upper {upper_visible_values}/{upper_total_values}, Lower {lower_visible_values}/{lower_total_values}"
+                        total_display = f"Filtered total: ₹{display_total_value:,} (Original: ₹{original_total_value:,})"
+                    else:
+                        total_display = f"Total value: ₹{original_total_value:,}"
                     
                     dpg.set_value("status_text", 
                         f"Pana table loaded for {bazar_value} | "
                         f"Numbers: {non_zero_count}/{total_numbers} active | "
-                        f"Total value: ₹{total_value:,}{filter_status}")
+                        f"{total_display}{filter_status}")
                 else:
                     dpg.set_value("status_text", "Please select date and bazar to load Pana table")
         except Exception as e:
