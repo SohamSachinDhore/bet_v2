@@ -13,8 +13,8 @@ class DirectNumberParser:
         self.validator = direct_validator
         self.logger = get_logger(__name__)
         
-        # Regex pattern for direct number format
-        self.pattern = re.compile(r'^\s*(\d{1,3})\s*=\s*(\d+)\s*$')
+        # Regex pattern for direct number format (supports currency)
+        self.pattern = re.compile(r'^\s*(\d{1,3})\s*=\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)\s*$', re.IGNORECASE)
     
     def parse(self, input_text: str) -> List[DirectNumberEntry]:
         """
@@ -98,7 +98,8 @@ class DirectNumberParser:
             raise ParseError(f"Invalid direct number format in line: {line}")
         
         number_text = match.group(1).strip()
-        value_text = match.group(2).strip()
+        currency_text = match.group(2) if match.group(2) else ""
+        value_text = match.group(3).strip()
         
         # Extract number and value
         number = int(number_text)

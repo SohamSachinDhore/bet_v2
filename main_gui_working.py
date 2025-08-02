@@ -102,11 +102,24 @@ def create_working_main_gui():
             try:
                 from src.business.calculation_engine import CalculationEngine, CalculationContext
                 from src.parsing.mixed_input_parser import MixedInputParser
+                from src.parsing.type_table_parser import TypeTableLoader
                 from datetime import date
                 
-                # Create parser and calculation engine directly
+                # Create parser
                 mixed_parser = MixedInputParser()
-                calc_engine = CalculationEngine()
+                
+                # Load type tables if database is available
+                if db_manager:
+                    try:
+                        table_loader = TypeTableLoader(db_manager)
+                        sp_table, dp_table, cp_table = table_loader.load_all_tables()
+                        calc_engine = CalculationEngine(sp_table, dp_table, cp_table)
+                        print(f"✅ Type tables loaded: SP({len(sp_table)}), DP({len(dp_table)}), CP({len(cp_table)})")
+                    except Exception as e:
+                        print(f"⚠️ Failed to load type tables: {e}")
+                        calc_engine = CalculationEngine()
+                else:
+                    calc_engine = CalculationEngine()
                 
                 # Parse input to get preview
                 parsed_result = mixed_parser.parse(input_text)
@@ -327,11 +340,21 @@ def create_working_main_gui():
                     try:
                         from src.business.calculation_engine import CalculationEngine, CalculationContext
                         from src.parsing.mixed_input_parser import MixedInputParser
+                        from src.parsing.type_table_parser import TypeTableLoader
                         from datetime import date
                         
-                        # Create parser and calculation engine directly
+                        # Create parser
                         mixed_parser = MixedInputParser()
-                        calc_engine = CalculationEngine()
+                        
+                        # Load type tables if database is available
+                        try:
+                            table_loader = TypeTableLoader(db_manager)
+                            sp_table, dp_table, cp_table = table_loader.load_all_tables()
+                            calc_engine = CalculationEngine(sp_table, dp_table, cp_table)
+                            print(f"✅ Type tables loaded for calculation: SP({len(sp_table)}), DP({len(dp_table)}), CP({len(cp_table)})")
+                        except Exception as e:
+                            print(f"⚠️ Failed to load type tables for calculation: {e}")
+                            calc_engine = CalculationEngine()
                         
                         # Get date from date display field
                         date_str = dpg.get_value("date_display")

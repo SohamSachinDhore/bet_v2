@@ -13,8 +13,8 @@ class MultiplicationParser:
         self.validator = multiplication_validator
         self.logger = get_logger(__name__)
         
-        # Regex pattern for multiplication format
-        self.pattern = re.compile(r'(\d{2})x(\d+)', re.IGNORECASE)
+        # Regex pattern for multiplication format (supports all symbols)
+        self.pattern = re.compile(r'(\d{2})[x\*×X](\d+)', re.IGNORECASE)
     
     def parse(self, input_text: str) -> List[MultiEntry]:
         """

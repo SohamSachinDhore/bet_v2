@@ -13,8 +13,8 @@ class TimeTableParser:
         self.validator = time_validator
         self.logger = get_logger(__name__)
         
-        # Regex pattern for time table format (supports single and double equals)
-        self.pattern = re.compile(r'^([0-9\s]+)\s*={1,2}\s*(\d+)$')
+        # Regex pattern for time table format (supports single and double equals, currency)
+        self.pattern = re.compile(r'^([0-9\s]+)\s*={1,2}\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)$', re.IGNORECASE)
     
     def parse(self, input_text: str) -> List[TimeEntry]:
         """
@@ -98,7 +98,8 @@ class TimeTableParser:
             raise ParseError(f"Invalid time table format in line: {line}")
         
         columns_text = match.group(1).strip()
-        value_text = match.group(2).strip()
+        currency_text = match.group(2) if match.group(2) else ""
+        value_text = match.group(3).strip()
         
         # Extract column numbers
         columns = self.extract_columns(columns_text)

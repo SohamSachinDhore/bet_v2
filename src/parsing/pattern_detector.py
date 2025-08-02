@@ -22,11 +22,11 @@ class PatternDetector:
     # Regex patterns with priority ordering (highest specificity first)
     PATTERNS = {
         PatternType.TYPE_TABLE: r'(\d+)(SP|DP|CP)\s*=\s*\d+',
-        PatternType.TIME_MULTIPLY: r'(\d{2})x(\d+)',
-        PatternType.JODI_TABLE: r'(\d{2}-\d{2}-.*=\d+)|(\d{2}-\d{2}-\d{2})',  # Jodi numbers with hyphens, ending in =value or just hyphen pattern
-        PatternType.DIRECT_NUMBER: r'^\s*(\d{1,2})\s*=\s*\d+\s*$',  # 1-2 digit direct numbers only
-        PatternType.PANA_TABLE: r'(\d{3}[\/\+\s\,\*]+.*=.*\d+)|(\d{3}\s*=\s*\d+)|(.*,\s*=.*Rs)|(^\d{3},\d{3},)|(^\s*=.*Rs)|(.*,\s*$)|(\d{3}[\/\+\,\*]+(\d{3}[\/\+\,\*]+)*\d{3}[\/\+\,\*]*$)|(^\s*=\s*\d+\s*$)',
-        PatternType.TIME_DIRECT: r'^([\d\s]+)\s*={1,2}\s*\d+$',
+        PatternType.TIME_MULTIPLY: r'(\d{2})[x\*×X](\d+)',  # Enhanced multiplication symbols
+        PatternType.JODI_TABLE: r'(\d{2}-\d{2}[-\d]*=\d+)|(\d{2}-\d{2}[-\d]*$)',  # Enhanced jodi pattern
+        PatternType.DIRECT_NUMBER: r'^\s*(\d{1,3})\s*=\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)\s*$',  # Enhanced with currency
+        PatternType.PANA_TABLE: r'(\d{3}[\/\+\s\,\*★✱]+.*=.*\d+)|(\d{3}\s*=\s*\d+)|(.*,\s*=.*Rs)|(^\d{3},\d{3},)|(^\s*=.*Rs)|(.*,\s*$)|(\d{3}[\/\+\,\*★✱]+(\d{3}[\/\+\,\*★✱]+)*\d{3}[\/\+\,\*★✱]*$)|(^\s*=\s*\d+\s*$)',
+        PatternType.TIME_DIRECT: r'^([\d\s]+)\s*={1,2}\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)$',  # Enhanced with currency
     }
     
     def __init__(self):
@@ -61,19 +61,45 @@ class PatternDetector:
                 self.logger.debug(f"Detected pattern {pattern_type.value} for line: {line}")
                 return pattern_type
         
-        # Special logic for TIME_DIRECT vs DIRECT_NUMBER vs PANA_TABLE
-        if re.match(r'^\s*(\d{1,3})\s*=\s*\d+\s*$', line):
-            # If it's a single number = value format, check context
-            if re.match(r'^\s*([0-9])\s*=\s*\d+\s*$', line):
-                # Single digits (0-9) are TIME_DIRECT entries
+        # Enhanced logic for TIME_DIRECT vs DIRECT_NUMBER vs PANA_TABLE
+        # Check for simple number=value patterns
+        simple_number_pattern = r'^\s*(\d{1,4})\s*=\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)\s*$'
+        match = re.match(simple_number_pattern, line)
+        if match:
+            number = int(match.group(1))
+            
+            # Single digits (0-9) with large values are likely DIRECT_NUMBER
+            # TIME_DIRECT typically has smaller values (< 10000)
+            value = int(match.group(3))
+            if 0 <= number <= 9:
+                if value >= 10000:  # Large values suggest direct number assignment
+                    return PatternType.DIRECT_NUMBER
+                elif not re.search(r'\d\s+\d', line):
+                    return PatternType.TIME_DIRECT
+            
+            # Numbers 10-99 are ambiguous - check for time table context (multiple digits)
+            elif 10 <= number <= 99:
+                # If it's a simple format without spaces, likely DIRECT_NUMBER
+                if not re.search(r'\d\s+\d', line):
+                    return PatternType.DIRECT_NUMBER
+                else:
+                    return PatternType.TIME_DIRECT
+            
+            # Numbers 100-999 are definitely DIRECT_NUMBER (pana range)
+            elif 100 <= number <= 999:
+                return PatternType.DIRECT_NUMBER
+            
+            # Numbers >= 1000 are invalid but should be caught as UNKNOWN, not cause parsing errors
+            else:
+                return PatternType.UNKNOWN
+        
+        # Check for multi-column time patterns (e.g., "0 1 3 5 = 900")
+        multi_column_pattern = r'^\s*([0-9\s]+)\s*={1,2}\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)\s*$'
+        if re.match(multi_column_pattern, line):
+            # If contains multiple space-separated digits, it's TIME_DIRECT
+            digits_part = re.match(multi_column_pattern, line).group(1).strip()
+            if len(digits_part.split()) > 1:
                 return PatternType.TIME_DIRECT
-            elif re.match(r'^\s*(\d{2})\s*=\s*\d+\s*$', line):
-                # 2-digit numbers could be time or direct - need more context
-                # For now, treat as DIRECT_NUMBER (pana table)
-                return PatternType.DIRECT_NUMBER
-            elif re.match(r'^\s*(\d{3})\s*=\s*\d+\s*$', line):
-                # 3-digit numbers are DIRECT_NUMBER (pana table)
-                return PatternType.DIRECT_NUMBER
         
         # Check remaining patterns
         for pattern_type in [PatternType.PANA_TABLE, PatternType.TIME_DIRECT]:
@@ -99,6 +125,15 @@ class PatternDetector:
         line_types = []
         pattern_counts = {}
         
+        # Special check for JODI table pattern first (multi-line analysis)
+        if self._is_jodi_table_format(input_text):
+            return PatternType.JODI_TABLE, [PatternType.JODI_TABLE] * len(lines), {
+                'total_lines': len(lines),
+                'pattern_counts': {PatternType.JODI_TABLE: len(lines)},
+                'unknown_lines': 0,
+                'confidence': 1.0
+            }
+        
         # Analyze each line
         for line in lines:
             line_type = self.detect_pattern_type(line)
@@ -122,6 +157,32 @@ class PatternDetector:
                         f"confidence: {stats['confidence']:.2f}")
         
         return overall_type, line_types, stats
+    
+    def _is_jodi_table_format(self, input_text: str) -> bool:
+        """Check if input matches JODI table multi-line format"""
+        lines = [line.strip() for line in input_text.strip().split('\n') if line.strip()]
+        
+        if len(lines) < 2:
+            return False
+        
+        # Check for classic JODI pattern: multiple lines of hyphen-separated numbers ending with =value
+        jodi_number_lines = 0
+        value_line_found = False
+        
+        for line in lines:
+            # Check if line contains hyphen-separated 2-digit numbers
+            if re.match(r'^\d{2}(-\d{2})+$', line):
+                jodi_number_lines += 1
+            # Check if line starts with = (value line)
+            elif re.match(r'^=\s*\d+$', line):
+                value_line_found = True
+            # Check if line ends with =value
+            elif re.match(r'.*=\s*\d+$', line) and '-' in line:
+                jodi_number_lines += 1
+                value_line_found = True
+        
+        # Must have at least 1 jodi number line and 1 value indicator
+        return jodi_number_lines >= 1 and (value_line_found or lines[-1].startswith('='))
     
     def _determine_overall_type(self, pattern_counts: dict, line_types: List[PatternType]) -> PatternType:
         """Determine overall pattern type from line analysis"""
