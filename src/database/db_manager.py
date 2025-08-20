@@ -2,6 +2,7 @@
 
 import sqlite3
 import threading
+import json
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Tuple
 import os
@@ -91,9 +92,13 @@ class DatabaseManager:
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            commission_type TEXT DEFAULT 'commission',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_active BOOLEAN DEFAULT 1
+            is_active BOOLEAN DEFAULT 1,
+            
+            -- Constraints
+            CONSTRAINT customers_commission_type_valid CHECK (commission_type IN ('commission', 'non_commission'))
         );
         
         -- Create bazars table
@@ -192,6 +197,85 @@ class DatabaseManager:
         query = "SELECT * FROM customers WHERE is_active = 1 ORDER BY name"
         return self.execute_query(query)
     
+    def update_customer(self, customer_id: int, name: str, commission_type: str = 'commission') -> bool:
+        """Update customer details and cascade name changes to all related tables"""
+        try:
+            with self.transaction() as conn:
+                # First, get the old customer name for logging
+                old_customer_query = "SELECT name FROM customers WHERE id = ? AND is_active = 1"
+                old_customer = self.execute_query(old_customer_query, (customer_id,))
+                old_name = old_customer[0]['name'] if old_customer else None
+                
+                # Update customer table
+                customer_query = """
+                UPDATE customers 
+                SET name = ?, commission_type = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND is_active = 1
+                """
+                customer_cursor = conn.cursor()
+                customer_cursor.execute(customer_query, (name, commission_type, customer_id))
+                customer_rows_affected = customer_cursor.rowcount
+                
+                if customer_rows_affected == 0:
+                    return False
+                
+                # Update customer_name in universal_log table (denormalized field)
+                universal_log_query = """
+                UPDATE universal_log 
+                SET customer_name = ?
+                WHERE customer_id = ?
+                """
+                universal_cursor = conn.cursor()
+                universal_cursor.execute(universal_log_query, (name, customer_id))
+                universal_rows_affected = universal_cursor.rowcount
+                
+                # Update customer_name in time_table (denormalized field)
+                time_table_query = """
+                UPDATE time_table 
+                SET customer_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE customer_id = ?
+                """
+                time_cursor = conn.cursor()
+                time_cursor.execute(time_table_query, (name, customer_id))
+                time_rows_affected = time_cursor.rowcount
+                
+                # Update customer_name in customer_bazar_summary (denormalized field)
+                summary_query = """
+                UPDATE customer_bazar_summary 
+                SET customer_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE customer_id = ?
+                """
+                summary_cursor = conn.cursor()
+                summary_cursor.execute(summary_query, (name, customer_id))
+                summary_rows_affected = summary_cursor.rowcount
+                
+                self.logger.info(f"Customer update cascaded: customer={customer_rows_affected}, "
+                               f"universal_log={universal_rows_affected}, time_table={time_rows_affected}, "
+                               f"summary={summary_rows_affected} rows affected")
+                               
+                if old_name and old_name != name:
+                    self.logger.info(f"Customer name changed from '{old_name}' to '{name}' for ID {customer_id}")
+                
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Failed to update customer {customer_id}: {e}")
+            return False
+    
+    def delete_customer(self, customer_id: int) -> bool:
+        """Delete customer (soft delete by setting is_active = 0)"""
+        try:
+            query = """
+            UPDATE customers 
+            SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """
+            rows_affected = self.execute_update(query, (customer_id,))
+            return rows_affected > 0
+        except Exception as e:
+            self.logger.error(f"Failed to delete customer {customer_id}: {e}")
+            return False
+    
     # Bazar Operations
     def get_all_bazars(self) -> List[sqlite3.Row]:
         """Get all active bazars"""
@@ -278,6 +362,316 @@ class DatabaseManager:
         params.extend([limit, offset])
         
         return self.execute_query(query, tuple(params))
+    
+    def update_universal_log_entry(self, entry_id: int, updates: Dict[str, Any]) -> bool:
+        """Update a universal log entry with customer name consistency and recalculate affected tables"""
+        try:
+            with self.transaction() as conn:
+                # First get the current entry for both validation and later recalculation
+                current_entry_query = "SELECT customer_id, customer_name, entry_date, bazar, entry_type FROM universal_log WHERE id = ?"
+                current_entry = self.execute_query(current_entry_query, (entry_id,))
+                
+                if not current_entry:
+                    return False
+                
+                entry = current_entry[0]
+                customer_id = entry['customer_id']
+                current_customer_name = entry['customer_name']
+                old_entry_date = entry['entry_date']
+                old_bazar = entry['bazar']
+                old_entry_type = entry['entry_type']
+                
+                # Get the correct customer name from customers table
+                customer_query = "SELECT name FROM customers WHERE id = ? AND is_active = 1"
+                customer_result = self.execute_query(customer_query, (customer_id,))
+                
+                if not customer_result:
+                    self.logger.warning(f"Customer {customer_id} not found or inactive")
+                    return False
+                
+                correct_customer_name = customer_result[0]['name']
+                
+                # Build dynamic update query
+                update_fields = []
+                params = []
+                
+                allowed_fields = ['number', 'value', 'entry_type', 'bazar', 'source_line']
+                for field in allowed_fields:
+                    if field in updates:
+                        update_fields.append(f"{field} = ?")
+                        params.append(updates[field])
+                
+                # Always ensure customer_name is correct (in case it was out of sync)
+                if current_customer_name != correct_customer_name:
+                    update_fields.append("customer_name = ?")
+                    params.append(correct_customer_name)
+                    self.logger.info(f"Correcting customer_name from '{current_customer_name}' to '{correct_customer_name}' for entry {entry_id}")
+                
+                if not update_fields:
+                    return False
+                
+                query = f"""
+                UPDATE universal_log 
+                SET {', '.join(update_fields)}
+                WHERE id = ?
+                """
+                params.append(entry_id)
+                
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                rows_affected = cursor.rowcount
+                
+                if rows_affected > 0:
+                    # Determine what contexts need recalculation
+                    contexts_to_recalc = set()
+                    
+                    # Always recalculate the old context
+                    contexts_to_recalc.add((customer_id, correct_customer_name, old_entry_date, old_bazar, old_entry_type))
+                    
+                    # If bazar or entry_date changed, also recalculate new context
+                    new_bazar = updates.get('bazar', old_bazar)
+                    new_entry_type = updates.get('entry_type', old_entry_type)
+                    
+                    if new_bazar != old_bazar or new_entry_type != old_entry_type:
+                        contexts_to_recalc.add((customer_id, correct_customer_name, old_entry_date, new_bazar, new_entry_type))
+                    
+                    # Recalculate all affected contexts
+                    for context in contexts_to_recalc:
+                        cust_id, cust_name, ent_date, baz, ent_type = context
+                        self._recalculate_aggregated_tables_for_context(
+                            conn, cust_id, cust_name, ent_date, baz, ent_type
+                        )
+                
+                return rows_affected > 0
+                
+        except Exception as e:
+            self.logger.error(f"Failed to update universal log entry {entry_id}: {e}")
+            return False
+    
+    def delete_universal_log_entry(self, entry_id: int) -> bool:
+        """Delete a universal log entry and update related aggregated tables"""
+        try:
+            with self.transaction() as conn:
+                # First get the entry details before deletion for recalculation
+                entry_query = "SELECT customer_id, customer_name, entry_date, bazar, entry_type FROM universal_log WHERE id = ?"
+                entry_result = self.execute_query(entry_query, (entry_id,))
+                
+                if not entry_result:
+                    return False
+                
+                entry = entry_result[0]
+                customer_id = entry['customer_id']
+                customer_name = entry['customer_name']
+                entry_date = entry['entry_date']
+                bazar = entry['bazar']
+                entry_type = entry['entry_type']
+                
+                # Delete the universal log entry
+                delete_cursor = conn.cursor()
+                delete_cursor.execute("DELETE FROM universal_log WHERE id = ?", (entry_id,))
+                rows_affected = delete_cursor.rowcount
+                
+                if rows_affected > 0:
+                    # Recalculate affected aggregated tables
+                    self._recalculate_aggregated_tables_for_context(
+                        conn, customer_id, customer_name, entry_date, bazar, entry_type
+                    )
+                
+                return rows_affected > 0
+                
+        except Exception as e:
+            self.logger.error(f"Failed to delete universal log entry {entry_id}: {e}")
+            return False
+    
+    def _recalculate_aggregated_tables_for_context(self, conn, customer_id: int, customer_name: str, 
+                                                  entry_date: str, bazar: str, entry_type: str):
+        """Recalculate aggregated tables for a specific context after universal log changes"""
+        try:
+            # Recalculate pana_table (for PANA entries by bazar+date)
+            if entry_type == 'PANA':
+                self._recalculate_pana_table(conn, bazar, entry_date)
+            
+            # Recalculate time_table (for TIME_DIRECT and TIME_MULTI entries by customer+bazar+date)
+            if entry_type in ['TIME_DIRECT', 'TIME_MULTI']:
+                self._recalculate_time_table(conn, customer_id, customer_name, bazar, entry_date)
+            
+            # Recalculate jodi_table (for JODI entries by bazar+date) - if it exists
+            if entry_type == 'JODI':
+                self._recalculate_jodi_table(conn, bazar, entry_date)
+            
+            # Recalculate customer_bazar_summary for the affected customer+date
+            self._recalculate_customer_summary(conn, customer_id, customer_name, entry_date)
+            
+            self.logger.info(f"Recalculated aggregated tables for customer {customer_id}, date {entry_date}, bazar {bazar}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to recalculate aggregated tables: {e}")
+            raise
+    
+    def _recalculate_pana_table(self, conn, bazar: str, entry_date: str):
+        """Recalculate pana_table entries for a specific bazar and date"""
+        try:
+            # Clear existing pana_table entries for this bazar+date
+            clear_cursor = conn.cursor()
+            clear_cursor.execute("DELETE FROM pana_table WHERE bazar = ? AND entry_date = ?", (bazar, entry_date))
+            
+            # Recalculate from universal_log
+            recalc_query = """
+            INSERT INTO pana_table (bazar, entry_date, number, value, updated_at)
+            SELECT bazar, entry_date, number, SUM(value), CURRENT_TIMESTAMP
+            FROM universal_log
+            WHERE bazar = ? AND entry_date = ? AND entry_type = 'PANA'
+            GROUP BY bazar, entry_date, number
+            HAVING SUM(value) > 0
+            """
+            recalc_cursor = conn.cursor()
+            recalc_cursor.execute(recalc_query, (bazar, entry_date))
+            
+            self.logger.debug(f"Recalculated pana_table for {bazar} on {entry_date}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to recalculate pana_table: {e}")
+            raise
+    
+    def _recalculate_time_table(self, conn, customer_id: int, customer_name: str, bazar: str, entry_date: str):
+        """Recalculate time_table entry for a specific customer, bazar, and date"""
+        try:
+            # Clear existing time_table entry for this customer+bazar+date
+            clear_cursor = conn.cursor()
+            clear_cursor.execute(
+                "DELETE FROM time_table WHERE customer_id = ? AND bazar = ? AND entry_date = ?",
+                (customer_id, bazar, entry_date)
+            )
+            
+            # Recalculate column totals from universal_log
+            recalc_query = """
+            SELECT number, SUM(value) as total_value
+            FROM universal_log
+            WHERE customer_id = ? AND bazar = ? AND entry_date = ? 
+                AND entry_type IN ('TIME_DIRECT', 'TIME_MULTI')
+                AND number BETWEEN 0 AND 9
+            GROUP BY number
+            """
+            recalc_cursor = conn.cursor()
+            recalc_cursor.execute(recalc_query, (customer_id, bazar, entry_date))
+            column_totals = recalc_cursor.fetchall()
+            
+            if column_totals:
+                # Build column values
+                col_values = [0] * 10  # Initialize all columns to 0
+                for row in column_totals:
+                    column_num = row['number']
+                    if 0 <= column_num <= 9:
+                        col_values[column_num] = row['total_value']
+                
+                # Insert new time_table entry
+                insert_query = """
+                INSERT INTO time_table 
+                (customer_id, customer_name, bazar, entry_date, 
+                 col_0, col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8, col_9)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                insert_cursor = conn.cursor()
+                insert_cursor.execute(insert_query, [customer_id, customer_name, bazar, entry_date] + col_values)
+                
+                self.logger.debug(f"Recalculated time_table for customer {customer_id}, {bazar} on {entry_date}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to recalculate time_table: {e}")
+            raise
+    
+    def _recalculate_jodi_table(self, conn, bazar: str, entry_date: str):
+        """Recalculate jodi_table entries for a specific bazar and date (if jodi_table exists)"""
+        try:
+            # Check if jodi_table exists
+            check_cursor = conn.cursor()
+            check_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jodi_table'")
+            if not check_cursor.fetchone():
+                return  # jodi_table doesn't exist, skip
+            
+            # Clear existing jodi_table entries for this bazar+date
+            clear_cursor = conn.cursor()
+            clear_cursor.execute("DELETE FROM jodi_table WHERE bazar = ? AND entry_date = ?", (bazar, entry_date))
+            
+            # Recalculate from universal_log
+            recalc_query = """
+            INSERT INTO jodi_table (bazar, entry_date, jodi_number, value, updated_at)
+            SELECT bazar, entry_date, number, SUM(value), CURRENT_TIMESTAMP
+            FROM universal_log
+            WHERE bazar = ? AND entry_date = ? AND entry_type = 'JODI'
+                AND number BETWEEN 0 AND 99
+            GROUP BY bazar, entry_date, number
+            HAVING SUM(value) > 0
+            """
+            recalc_cursor = conn.cursor()
+            recalc_cursor.execute(recalc_query, (bazar, entry_date))
+            
+            self.logger.debug(f"Recalculated jodi_table for {bazar} on {entry_date}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to recalculate jodi_table: {e}")
+            # Don't raise - jodi_table might not exist
+    
+    def _recalculate_customer_summary(self, conn, customer_id: int, customer_name: str, entry_date: str):
+        """Recalculate customer_bazar_summary for a specific customer and date"""
+        try:
+            # Clear existing summary for this customer+date
+            clear_cursor = conn.cursor()
+            clear_cursor.execute(
+                "DELETE FROM customer_bazar_summary WHERE customer_id = ? AND entry_date = ?",
+                (customer_id, entry_date)
+            )
+            
+            # Recalculate bazar totals from universal_log
+            recalc_query = """
+            SELECT bazar, SUM(value) as total_value
+            FROM universal_log
+            WHERE customer_id = ? AND entry_date = ?
+            GROUP BY bazar
+            HAVING SUM(value) > 0
+            """
+            recalc_cursor = conn.cursor()
+            recalc_cursor.execute(recalc_query, (customer_id, entry_date))
+            bazar_totals = recalc_cursor.fetchall()
+            
+            if bazar_totals:
+                # Build bazar totals dict and map to column names
+                bazar_dict = {}
+                for row in bazar_totals:
+                    bazar_dict[row['bazar']] = row['total_value']
+                
+                # Map bazar names to column names
+                bazar_mapping = {
+                    'T.O': 'to_total', 'T.K': 'tk_total', 'M.O': 'mo_total', 'M.K': 'mk_total',
+                    'K.O': 'ko_total', 'K.K': 'kk_total', 'NMO': 'nmo_total', 'NMK': 'nmk_total',
+                    'B.O': 'bo_total', 'B.K': 'bk_total'
+                }
+                
+                # Build column values
+                column_values = {col: 0 for col in bazar_mapping.values()}  # Initialize all to 0
+                for bazar, total in bazar_dict.items():
+                    if bazar in bazar_mapping:
+                        column_values[bazar_mapping[bazar]] = total
+                
+                # Build INSERT query with actual column names
+                columns = ['customer_id', 'customer_name', 'entry_date'] + list(column_values.keys()) + ['updated_at']
+                values = [customer_id, customer_name, entry_date] + list(column_values.values()) + ['CURRENT_TIMESTAMP']
+                placeholders = ['?'] * (len(values) - 1) + ['CURRENT_TIMESTAMP']
+                
+                insert_query = f"""
+                INSERT INTO customer_bazar_summary 
+                ({', '.join(columns)})
+                VALUES ({', '.join(placeholders)})
+                """
+                
+                insert_cursor = conn.cursor()
+                insert_cursor.execute(insert_query, values[:-1])  # Exclude CURRENT_TIMESTAMP from params
+                
+                self.logger.debug(f"Recalculated customer_bazar_summary for customer {customer_id} on {entry_date}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to recalculate customer_bazar_summary: {e}")
+            raise
     
     # Pana Table Operations
     def update_pana_table_entry(self, bazar: str, entry_date: str, number: int, value_to_add: int) -> None:

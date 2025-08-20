@@ -495,6 +495,370 @@ def create_working_main_gui():
                 dpg.add_button(label="Add", callback=confirm_add_customer, width=100)
                 dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("add_customer_window"), width=100)
     
+    def edit_customer(customer_id: int):
+        """Open edit dialog for customer"""
+        if dpg.does_item_exist("edit_customer_window"):
+            dpg.delete_item("edit_customer_window")
+        
+        # Get current customer data
+        customer = None
+        for c in customers:
+            if c['id'] == customer_id:
+                customer = c
+                break
+        
+        if not customer:
+            dpg.set_value("status_text", f"Customer {customer_id} not found")
+            return
+        
+        with dpg.window(
+            label=f"Edit Customer - {customer['name']}",
+            tag="edit_customer_window",
+            modal=True,
+            width=350,
+            height=180,
+            pos=[400, 300]
+        ):
+            dpg.add_input_text(
+                label="Name", 
+                tag="edit_customer_name", 
+                default_value=customer['name'],
+                width=-1
+            )
+            dpg.add_spacer(height=10)
+            
+            dpg.add_text("Customer Type:")
+            current_type = "Commission" if customer.get('commission_type', 'commission') == 'commission' else "Non-Commission"
+            dpg.add_radio_button(
+                items=["Commission", "Non-Commission"],
+                tag="edit_customer_type",
+                default_value=current_type,
+                horizontal=True
+            )
+            dpg.add_spacer(height=10)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Save", 
+                    callback=lambda: confirm_edit_customer(customer_id), 
+                    width=100
+                )
+                dpg.add_button(
+                    label="Cancel", 
+                    callback=lambda: dpg.delete_item("edit_customer_window"), 
+                    width=100
+                )
+    
+    def confirm_edit_customer(customer_id: int):
+        """Confirm customer edit"""
+        try:
+            name = dpg.get_value("edit_customer_name").strip()
+            if not name:
+                dpg.set_value("status_text", "Error: Name cannot be empty")
+                return
+            
+            # Check for duplicate names (excluding current customer)
+            if any(c["name"].lower() == name.lower() and c["id"] != customer_id for c in customers):
+                dpg.set_value("status_text", "Error: Customer name already exists")
+                return
+            
+            # Get commission type
+            customer_type = dpg.get_value("edit_customer_type")
+            commission_type = "commission" if customer_type == "Commission" else "non_commission"
+            
+            if db_manager:
+                success = db_manager.update_customer(customer_id, name, commission_type)
+                if success:
+                    # Update local list
+                    for c in customers:
+                        if c['id'] == customer_id:
+                            c['name'] = name
+                            c['commission_type'] = commission_type
+                            break
+                    
+                    # Update combo
+                    customer_names = [c["name"] for c in customers]
+                    dpg.configure_item("customer_combo", items=customer_names)
+                    
+                    dpg.delete_item("edit_customer_window")
+                    dpg.set_value("status_text", f"Customer '{name}' updated successfully")
+                    
+                    # Refresh all affected tables if open
+                    if dpg.does_item_exist("customers_table"):
+                        refresh_customers_table()
+                    if dpg.does_item_exist("universal_table"):
+                        refresh_universal_table()
+                    if dpg.does_item_exist("time_table"):
+                        refresh_time_table()
+                    if dpg.does_item_exist("summary_table"):
+                        refresh_summary_table()
+                else:
+                    dpg.set_value("status_text", "Error: Failed to update customer")
+            else:
+                dpg.set_value("status_text", "Error: Database not connected")
+                
+        except Exception as e:
+            dpg.set_value("status_text", f"Update error: {e}")
+    
+    def edit_universal_entry(entry_id: int):
+        """Open edit dialog for universal log entry"""
+        if dpg.does_item_exist("edit_universal_window"):
+            dpg.delete_item("edit_universal_window")
+        
+        # Get entry data from database
+        entry = None
+        if db_manager:
+            # Query the entry directly
+            query = "SELECT * FROM universal_log WHERE id = ?"
+            entries = db_manager.execute_query(query, (entry_id,))
+            if entries:
+                entry = entries[0]
+        
+        if not entry:
+            dpg.set_value("status_text", f"Entry {entry_id} not found")
+            return
+        
+        with dpg.window(
+            label=f"Edit Entry - ID: {entry_id}",
+            tag="edit_universal_window",
+            modal=True,
+            width=400,
+            height=350,
+            pos=[400, 250]
+        ):
+            # Read-only fields
+            dpg.add_text(f"ID: {entry['id']}")
+            dpg.add_text(f"Customer: {entry['customer_name']}")
+            dpg.add_text(f"Date: {entry['entry_date']}")
+            dpg.add_text(f"Created: {entry['created_at']}")
+            dpg.add_separator()
+            
+            # Editable fields
+            dpg.add_input_int(
+                label="Number",
+                tag="edit_entry_number",
+                default_value=entry['number'],
+                min_value=0,
+                max_value=999,
+                min_clamped=True,
+                max_clamped=True,
+                width=150
+            )
+            
+            dpg.add_input_int(
+                label="Value",
+                tag="edit_entry_value",
+                default_value=entry['value'],
+                min_value=0,
+                min_clamped=True,
+                width=150
+            )
+            
+            dpg.add_combo(
+                label="Bazar",
+                tag="edit_entry_bazar",
+                items=[b["display_name"] for b in bazars],
+                default_value=entry['bazar'],
+                width=150
+            )
+            
+            dpg.add_combo(
+                label="Type",
+                tag="edit_entry_type",
+                items=["PANA", "TYPE", "TIME_DIRECT", "TIME_MULTI", "DIRECT", "JODI"],
+                default_value=entry['entry_type'],
+                width=150
+            )
+            
+            dpg.add_spacer(height=10)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Save",
+                    callback=lambda: confirm_edit_universal(entry_id),
+                    width=100
+                )
+                dpg.add_button(
+                    label="Cancel",
+                    callback=lambda: dpg.delete_item("edit_universal_window"),
+                    width=100
+                )
+    
+    def confirm_edit_universal(entry_id: int):
+        """Confirm universal entry edit"""
+        try:
+            number = dpg.get_value("edit_entry_number")
+            value = dpg.get_value("edit_entry_value")
+            bazar = dpg.get_value("edit_entry_bazar")
+            entry_type = dpg.get_value("edit_entry_type")
+            
+            if db_manager:
+                updates = {
+                    'number': number,
+                    'value': value,
+                    'bazar': bazar,
+                    'entry_type': entry_type
+                }
+                
+                success = db_manager.update_universal_log_entry(entry_id, updates)
+                if success:
+                    dpg.delete_item("edit_universal_window")
+                    dpg.set_value("status_text", f"Entry {entry_id} updated successfully")
+                    
+                    # Refresh all affected tables if open
+                    if dpg.does_item_exist("universal_table"):
+                        refresh_universal_table()
+                    if dpg.does_item_exist("pana_table"):
+                        refresh_pana_table()
+                    if dpg.does_item_exist("time_table"):
+                        refresh_time_table()
+                    if dpg.does_item_exist("jodi_table"):
+                        refresh_jodi_table()
+                    if dpg.does_item_exist("summary_table"):
+                        refresh_summary_table()
+                    if dpg.does_item_exist("customers_table"):
+                        refresh_customers_table()
+                else:
+                    dpg.set_value("status_text", "Error: Failed to update entry")
+            else:
+                dpg.set_value("status_text", "Error: Database not connected")
+                
+        except Exception as e:
+            dpg.set_value("status_text", f"Update error: {e}")
+    
+    def delete_universal_entry(entry_id: int):
+        """Show delete confirmation for universal log entry"""
+        if dpg.does_item_exist("delete_universal_window"):
+            dpg.delete_item("delete_universal_window")
+        
+        with dpg.window(
+            label="Confirm Delete",
+            tag="delete_universal_window",
+            modal=True,
+            width=350,
+            height=150,
+            pos=[400, 300]
+        ):
+            dpg.add_text(f"Are you sure you want to delete entry ID: {entry_id}?")
+            dpg.add_spacer(height=10)
+            dpg.add_text("⚠️ This action cannot be undone.", color=(255, 100, 100, 255))
+            dpg.add_spacer(height=10)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Delete",
+                    callback=lambda: confirm_delete_universal(entry_id),
+                    width=100
+                )
+                dpg.add_button(
+                    label="Cancel",
+                    callback=lambda: dpg.delete_item("delete_universal_window"),
+                    width=100
+                )
+    
+    def confirm_delete_universal(entry_id: int):
+        """Confirm universal entry deletion"""
+        try:
+            if db_manager:
+                success = db_manager.delete_universal_log_entry(entry_id)
+                if success:
+                    dpg.delete_item("delete_universal_window")
+                    dpg.set_value("status_text", f"Entry {entry_id} deleted successfully")
+                    
+                    # Refresh all affected tables
+                    if dpg.does_item_exist("universal_table"):
+                        refresh_universal_table()
+                    if dpg.does_item_exist("customers_table"):
+                        refresh_customers_table()
+                    if dpg.does_item_exist("pana_table"):
+                        refresh_pana_table()
+                    if dpg.does_item_exist("time_table"):
+                        refresh_time_table()
+                    if dpg.does_item_exist("jodi_table"):
+                        refresh_jodi_table()
+                    if dpg.does_item_exist("summary_table"):
+                        refresh_summary_table()
+                else:
+                    dpg.set_value("status_text", "Error: Failed to delete entry")
+            else:
+                dpg.set_value("status_text", "Error: Database not connected")
+                
+        except Exception as e:
+            dpg.set_value("status_text", f"Delete error: {e}")
+    
+    def delete_customer(customer_id: int):
+        """Show delete confirmation for customer"""
+        if dpg.does_item_exist("delete_customer_window"):
+            dpg.delete_item("delete_customer_window")
+        
+        # Get customer name
+        customer_name = "Unknown"
+        for c in customers:
+            if c['id'] == customer_id:
+                customer_name = c['name']
+                break
+        
+        with dpg.window(
+            label="Confirm Delete",
+            tag="delete_customer_window",
+            modal=True,
+            width=400,
+            height=200,
+            pos=[400, 300]
+        ):
+            dpg.add_text(f"Are you sure you want to delete customer:")
+            dpg.add_text(f"'{customer_name}' (ID: {customer_id})?", color=(255, 255, 0, 255))
+            dpg.add_spacer(height=10)
+            dpg.add_text("⚠️ WARNING:", color=(255, 100, 100, 255))
+            dpg.add_text("This will also delete ALL entries for this customer!", wrap=350)
+            dpg.add_text("This action cannot be undone.", color=(255, 100, 100, 255))
+            dpg.add_spacer(height=10)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Delete", 
+                    callback=lambda: confirm_delete_customer(customer_id),
+                    width=100
+                )
+                dpg.add_button(
+                    label="Cancel", 
+                    callback=lambda: dpg.delete_item("delete_customer_window"),
+                    width=100
+                )
+    
+    def confirm_delete_customer(customer_id: int):
+        """Confirm customer deletion"""
+        try:
+            if db_manager:
+                success = db_manager.delete_customer(customer_id)
+                if success:
+                    # Remove from local list
+                    customer_name = ""
+                    customers[:] = [c for c in customers if c['id'] != customer_id or (customer_name := c['name'], False)]
+                    
+                    # Update combo
+                    customer_names = [c["name"] for c in customers]
+                    if customer_names:
+                        dpg.configure_item("customer_combo", items=customer_names, default_value=customer_names[0])
+                    else:
+                        dpg.configure_item("customer_combo", items=["No Customers"], default_value="No Customers")
+                    
+                    dpg.delete_item("delete_customer_window")
+                    dpg.set_value("status_text", f"Customer deleted successfully")
+                    
+                    # Refresh tables if open
+                    if dpg.does_item_exist("customers_table"):
+                        refresh_customers_table()
+                    if dpg.does_item_exist("universal_table"):
+                        refresh_universal_table()
+                else:
+                    dpg.set_value("status_text", "Error: Failed to delete customer")
+            else:
+                dpg.set_value("status_text", "Error: Database not connected")
+                
+        except Exception as e:
+            dpg.set_value("status_text", f"Delete error: {e}")
+    
     def confirm_add_customer():
         """Confirm customer addition"""
         try:
@@ -542,6 +906,89 @@ def create_working_main_gui():
                 break
         
         dpg.set_value("status_text", f"Selected customer: {customer_name}")
+    
+    def handle_customer_combo_keys(sender, app_data, user_data):
+        """Handle keyboard navigation for customer combo"""
+        # Check if focus is appropriate (not in text input fields)
+        focused_item = dpg.get_focused_item()
+        
+        # Skip if user is typing in an input field
+        if focused_item and ("input" in str(focused_item).lower() or "text" in str(focused_item).lower()):
+            return
+        
+        # Get current selection
+        current_value = dpg.get_value("customer_combo")
+        customer_names = [c["name"] for c in customers]
+        
+        if not customer_names or current_value == "No Customers":
+            return
+        
+        try:
+            current_index = customer_names.index(current_value)
+        except ValueError:
+            current_index = 0
+        
+        # Handle arrow keys for customer navigation
+        if app_data == dpg.mvKey_Down:
+            # Move down the list
+            new_index = (current_index + 1) % len(customer_names)
+            new_customer = customer_names[new_index]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Next customer: {new_customer} ({new_index + 1}/{len(customer_names)})")
+            
+        elif app_data == dpg.mvKey_Up:
+            # Move up the list
+            new_index = (current_index - 1) % len(customer_names)
+            new_customer = customer_names[new_index]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Previous customer: {new_customer} ({new_index + 1}/{len(customer_names)})")
+            
+        # Page Up/Down for faster navigation
+        elif app_data == dpg.mvKey_PageDown:
+            # Jump down 5 customers
+            new_index = (current_index + 5) % len(customer_names)
+            new_customer = customer_names[new_index]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Jump to customer: {new_customer} ({new_index + 1}/{len(customer_names)}) [PageDown]")
+            
+        elif app_data == dpg.mvKey_PageUp:
+            # Jump up 5 customers
+            new_index = (current_index - 5) % len(customer_names)
+            new_customer = customer_names[new_index]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Jump to customer: {new_customer} ({new_index + 1}/{len(customer_names)}) [PageUp]")
+            
+        # Home/End for first/last customer
+        elif app_data == dpg.mvKey_Home:
+            new_customer = customer_names[0]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"First customer: {new_customer} [Home]")
+            
+        elif app_data == dpg.mvKey_End:
+            new_customer = customer_names[-1]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Last customer: {new_customer} [End]")
+            
+        # Also handle Ctrl+D for down and Ctrl+U for up as alternatives
+        elif app_data == dpg.mvKey_D and dpg.is_key_down(dpg.mvKey_LCtrl):
+            new_index = (current_index + 1) % len(customer_names)
+            new_customer = customer_names[new_index]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Next customer: {new_customer} (Ctrl+D)")
+            
+        elif app_data == dpg.mvKey_U and dpg.is_key_down(dpg.mvKey_LCtrl):
+            new_index = (current_index - 1) % len(customer_names)
+            new_customer = customer_names[new_index]
+            dpg.set_value("customer_combo", new_customer)
+            on_customer_selected("customer_combo", new_customer, None)
+            dpg.set_value("status_text", f"Previous customer: {new_customer} (Ctrl+U)")
     
     def on_customer_id_entered(sender, app_data, user_data):
         """Handle customer ID entry"""
@@ -861,6 +1308,7 @@ def create_working_main_gui():
             dpg.add_table_column(label="Last Activity", width=150)
             dpg.add_table_column(label="Total Entries", width=120)
             dpg.add_table_column(label="Total Value", width=120)
+            dpg.add_table_column(label="Actions", width=150)
         
         # Load initial data
         refresh_customers_table()
@@ -905,6 +1353,7 @@ def create_working_main_gui():
             dpg.add_table_column(label="Value", width=100)
             dpg.add_table_column(label="Type", width=100)
             dpg.add_table_column(label="Created", width=140)
+            dpg.add_table_column(label="Actions", width=150)
         
         # Load initial data
         refresh_universal_table()
@@ -1491,6 +1940,23 @@ def create_working_main_gui():
                                     dpg.add_text("Never")
                                     dpg.add_text("0")
                                     dpg.add_text("0")
+                                
+                                # Add action buttons
+                                with dpg.group(horizontal=True):
+                                    dpg.add_button(
+                                        label="Edit",
+                                        callback=lambda s, a, u: edit_customer(u),
+                                        user_data=customer['id'],
+                                        width=60,
+                                        height=20
+                                    )
+                                    dpg.add_button(
+                                        label="Delete",
+                                        callback=lambda s, a, u: delete_customer(u),
+                                        user_data=customer['id'],
+                                        width=60,
+                                        height=20
+                                    )
                     except Exception as e:
                         print(f"Error loading customer stats: {e}")
                         # Fallback to simple customer list
@@ -1514,6 +1980,23 @@ def create_working_main_gui():
                                 dpg.add_text("Today")
                                 dpg.add_text("0")
                                 dpg.add_text("0")
+                                
+                                # Add action buttons
+                                with dpg.group(horizontal=True):
+                                    dpg.add_button(
+                                        label="Edit",
+                                        callback=lambda s, a, u: edit_customer(u),
+                                        user_data=customer['id'],
+                                        width=60,
+                                        height=20
+                                    )
+                                    dpg.add_button(
+                                        label="Delete",
+                                        callback=lambda s, a, u: delete_customer(u),
+                                        user_data=customer['id'],
+                                        width=60,
+                                        height=20
+                                    )
                 else:
                     # Fallback when no database
                     for customer in customers:
@@ -1562,11 +2045,28 @@ def create_working_main_gui():
                                     dpg.add_text(f"₹{entry['value']}")
                                     dpg.add_text(entry['entry_type'])
                                     dpg.add_text(entry['created_at'])
+                                    
+                                    # Add action buttons
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_button(
+                                            label="Edit",
+                                            callback=lambda s, a, u: edit_universal_entry(u),
+                                            user_data=entry['id'],
+                                            width=60,
+                                            height=20
+                                        )
+                                        dpg.add_button(
+                                            label="Delete",
+                                            callback=lambda s, a, u: delete_universal_entry(u),
+                                            user_data=entry['id'],
+                                            width=60,
+                                            height=20
+                                        )
                         else:
                             # No entries found
                             with dpg.table_row(parent="universal_table"):
                                 dpg.add_text("No entries found - Start by submitting some data", color=(150, 150, 150, 255))
-                                for _ in range(7):
+                                for _ in range(8):  # 8 columns plus Actions
                                     dpg.add_text("", color=(150, 150, 150, 255))
                     except AttributeError:
                         # No data available
@@ -1575,7 +2075,7 @@ def create_working_main_gui():
                     # No database - show empty table message
                     with dpg.table_row(parent="universal_table"):
                         dpg.add_text("No data available - Database not connected", color=(150, 150, 150, 255))
-                        for _ in range(7):  # Fill remaining columns
+                        for _ in range(8):  # Fill remaining columns including Actions
                             dpg.add_text("")
         except Exception as e:
             dpg.set_value("status_text", f"Error refreshing universal log: {e}")
@@ -2352,6 +2852,12 @@ def create_working_main_gui():
                 width=150,
                 callback=on_customer_selected
             )
+            with dpg.tooltip("customer_combo"):
+                dpg.add_text("💡 Keyboard Shortcuts:")
+                dpg.add_text("↑/↓ Arrow Keys: Navigate customers")
+                dpg.add_text("PageUp/Down: Jump 5 customers")
+                dpg.add_text("Home/End: First/Last customer")
+                dpg.add_text("Ctrl+U/D: Alternative navigation")
             
             dpg.add_spacer(width=10)
             
@@ -2561,7 +3067,7 @@ def create_working_main_gui():
         dpg.add_separator()
         with dpg.group(horizontal=True):
             dpg.add_text("Status:", color=[100, 150, 255])
-            dpg.add_text("Ready", tag="status_text", color=[100, 255, 100])
+            dpg.add_text("Ready - Use ↑↓ keys to navigate customers", tag="status_text", color=[100, 255, 100])
             dpg.add_spacer(width=50)
             dpg.add_text("", tag="last_entry_text", color=[150, 150, 150])
         
@@ -2586,6 +3092,10 @@ def create_working_main_gui():
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
+    
+    # Add keyboard handler for customer combo navigation
+    with dpg.handler_registry():
+        dpg.add_key_press_handler(callback=handle_customer_combo_keys)
     
     return db_manager
 
