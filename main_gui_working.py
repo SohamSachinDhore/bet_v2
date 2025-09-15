@@ -18,10 +18,11 @@ customers = []
 bazars = []
 db_manager = None
 config_manager = None
+input_area_focused = False  # Track if input area is focused
 
 def create_working_main_gui():
     """Create a working main GUI with all features"""
-    global customers, bazars, db_manager, config_manager
+    global customers, bazars, db_manager, config_manager, input_area_focused
     
     # Initialize database and config
     try:
@@ -909,11 +910,10 @@ def create_working_main_gui():
     
     def handle_customer_combo_keys(sender, app_data, user_data):
         """Handle keyboard navigation for customer combo"""
-        # Check if focus is appropriate (not in text input fields)
-        focused_item = dpg.get_focused_item()
-        
-        # Skip if user is typing in an input field
-        if focused_item and ("input" in str(focused_item).lower() or "text" in str(focused_item).lower()):
+        global input_area_focused
+
+        # Skip if input area is focused (tracked by our focus handlers)
+        if input_area_focused:
             return
         
         # Get current selection
@@ -945,50 +945,38 @@ def create_working_main_gui():
             on_customer_selected("customer_combo", new_customer, None)
             dpg.set_value("status_text", f"Previous customer: {new_customer} ({new_index + 1}/{len(customer_names)})")
             
-        # Page Up/Down for faster navigation
-        elif app_data == dpg.mvKey_PageDown:
+        # Use Ctrl+Shift+Down/Up for faster navigation (jump 5)
+        elif app_data == dpg.mvKey_Down and dpg.is_key_down(dpg.mvKey_LShift):
             # Jump down 5 customers
             new_index = (current_index + 5) % len(customer_names)
             new_customer = customer_names[new_index]
             dpg.set_value("customer_combo", new_customer)
             on_customer_selected("customer_combo", new_customer, None)
-            dpg.set_value("status_text", f"Jump to customer: {new_customer} ({new_index + 1}/{len(customer_names)}) [PageDown]")
-            
-        elif app_data == dpg.mvKey_PageUp:
+            dpg.set_value("status_text", f"Jump to customer: {new_customer} ({new_index + 1}/{len(customer_names)}) [Shift+Down]")
+
+        elif app_data == dpg.mvKey_Up and dpg.is_key_down(dpg.mvKey_LShift):
             # Jump up 5 customers
             new_index = (current_index - 5) % len(customer_names)
             new_customer = customer_names[new_index]
             dpg.set_value("customer_combo", new_customer)
             on_customer_selected("customer_combo", new_customer, None)
-            dpg.set_value("status_text", f"Jump to customer: {new_customer} ({new_index + 1}/{len(customer_names)}) [PageUp]")
-            
-        # Home/End for first/last customer
-        elif app_data == dpg.mvKey_Home:
+            dpg.set_value("status_text", f"Jump to customer: {new_customer} ({new_index + 1}/{len(customer_names)}) [Shift+Up]")
+
+        # Ctrl+Home/End for first/last customer (safer key combinations)
+        elif app_data == dpg.mvKey_Down and dpg.is_key_down(dpg.mvKey_LCtrl):
+            # Go to first customer
             new_customer = customer_names[0]
             dpg.set_value("customer_combo", new_customer)
             on_customer_selected("customer_combo", new_customer, None)
-            dpg.set_value("status_text", f"First customer: {new_customer} [Home]")
-            
-        elif app_data == dpg.mvKey_End:
+            dpg.set_value("status_text", f"First customer: {new_customer} [Ctrl+Down]")
+
+        elif app_data == dpg.mvKey_Up and dpg.is_key_down(dpg.mvKey_LCtrl):
+            # Go to last customer
             new_customer = customer_names[-1]
             dpg.set_value("customer_combo", new_customer)
             on_customer_selected("customer_combo", new_customer, None)
-            dpg.set_value("status_text", f"Last customer: {new_customer} [End]")
+            dpg.set_value("status_text", f"Last customer: {new_customer} [Ctrl+Up]")
             
-        # Also handle Ctrl+D for down and Ctrl+U for up as alternatives
-        elif app_data == dpg.mvKey_D and dpg.is_key_down(dpg.mvKey_LCtrl):
-            new_index = (current_index + 1) % len(customer_names)
-            new_customer = customer_names[new_index]
-            dpg.set_value("customer_combo", new_customer)
-            on_customer_selected("customer_combo", new_customer, None)
-            dpg.set_value("status_text", f"Next customer: {new_customer} (Ctrl+D)")
-            
-        elif app_data == dpg.mvKey_U and dpg.is_key_down(dpg.mvKey_LCtrl):
-            new_index = (current_index - 1) % len(customer_names)
-            new_customer = customer_names[new_index]
-            dpg.set_value("customer_combo", new_customer)
-            on_customer_selected("customer_combo", new_customer, None)
-            dpg.set_value("status_text", f"Previous customer: {new_customer} (Ctrl+U)")
     
     def on_customer_id_entered(sender, app_data, user_data):
         """Handle customer ID entry"""
@@ -2853,11 +2841,12 @@ def create_working_main_gui():
                 callback=on_customer_selected
             )
             with dpg.tooltip("customer_combo"):
-                dpg.add_text("💡 Keyboard Shortcuts:")
+                dpg.add_text("💡 Customer Navigation (when not typing):")
                 dpg.add_text("↑/↓ Arrow Keys: Navigate customers")
-                dpg.add_text("PageUp/Down: Jump 5 customers")
-                dpg.add_text("Home/End: First/Last customer")
-                dpg.add_text("Ctrl+U/D: Alternative navigation")
+                dpg.add_text("Shift+↑/↓: Jump 5 customers")
+                dpg.add_text("Ctrl+↑/↓: First/Last customer")
+                dpg.add_text("F2: Focus dropdown for navigation")
+                dpg.add_text("💡 Disabled when typing in text areas")
             
             dpg.add_spacer(width=10)
             
@@ -2941,8 +2930,17 @@ def create_working_main_gui():
                 dpg.add_spacer(height=3)
                 
                 def on_input_focus():
-                    """Remove focus indicator from submit button when input gains focus"""
+                    """Handle when input area gains focus"""
+                    global input_area_focused
+                    input_area_focused = True
                     on_submit_blur()
+                    # print("Input area focused - navigation disabled")
+
+                def on_input_blur():
+                    """Handle when input area loses focus"""
+                    global input_area_focused
+                    input_area_focused = False
+                    # print("Input area unfocused - navigation enabled")
                 
                 dpg.add_input_text(
                     tag="input_area",
@@ -2953,6 +2951,14 @@ def create_working_main_gui():
                     callback=on_input_change,
                     tab_input=False  # Disable tab character insertion
                 )
+
+                # Add focus handlers for the input area
+                with dpg.item_handler_registry() as input_handler:
+                    dpg.add_item_activated_handler(callback=on_input_focus)
+                    dpg.add_item_deactivated_handler(callback=on_input_blur)
+                    dpg.add_item_clicked_handler(callback=on_input_focus)
+
+                dpg.bind_item_handler_registry("input_area", input_handler)
                 
                 # Add keyboard handler for Tab navigation with visual feedback
                 def handle_tab_key():
@@ -3067,7 +3073,7 @@ def create_working_main_gui():
         dpg.add_separator()
         with dpg.group(horizontal=True):
             dpg.add_text("Status:", color=[100, 150, 255])
-            dpg.add_text("Ready - Use ↑↓ keys to navigate customers", tag="status_text", color=[100, 255, 100])
+            dpg.add_text("Ready - Use ↑↓ keys to navigate customers (disabled when typing)", tag="status_text", color=[100, 255, 100])
             dpg.add_spacer(width=50)
             dpg.add_text("", tag="last_entry_text", color=[150, 150, 150])
         
@@ -3093,9 +3099,11 @@ def create_working_main_gui():
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
     
-    # Add keyboard handler for customer combo navigation
+    # Add keyboard handlers
     with dpg.handler_registry():
         dpg.add_key_press_handler(callback=handle_customer_combo_keys)
+        # F2 to focus customer combo for quick navigation
+        dpg.add_key_press_handler(dpg.mvKey_F2, callback=lambda: dpg.focus_item("customer_combo"))
     
     return db_manager
 
