@@ -1,21 +1,28 @@
-"""Jodi table input parser for jodi number patterns"""
+"""Jodi table input parser for jodi number patterns with universal separator support"""
 
 import re
 from typing import List, Optional
 from ..database.models import JodiEntry
 from ..utils.error_handler import ParseError, ValidationError
 from ..utils.logger import get_logger
+from .separator_utils import UnifiedSeparatorHandler
 
 class JodiTableParser:
-    """Jodi table input parser for multi-line jodi number assignments"""
-    
+    """Jodi table input parser for multi-line jodi number assignments with universal separator support"""
+
     def __init__(self, jodi_validator: Optional['JodiValidator'] = None):
         self.validator = jodi_validator
         self.logger = get_logger(__name__)
-        
-        # Pattern for jodi format: multiple lines ending with =value
-        # Example: 22-24-26-28-20\n42-44-46-48-40\n...=500
-        self.jodi_pattern = re.compile(r'^([0-9\-\s\n]+)\s*=\s*(\d+)$', re.MULTILINE | re.DOTALL)
+        self.separator_handler = UnifiedSeparatorHandler()
+
+        # Get supported separators from unified handler
+        separator_config = self.separator_handler.get_supported_separators('jodi')
+        all_jodi_seps = separator_config['primary'] + separator_config['secondary']
+        escaped_seps = [re.escape(sep) for sep in all_jodi_seps]
+
+        # Enhanced pattern for jodi format with universal separators
+        separator_pattern = f'[{"".join(escaped_seps)}]'
+        self.jodi_pattern = re.compile(f'^([0-9{separator_pattern}\\s\\n]+)\\s*=\\s*(\\d+)$', re.MULTILINE | re.DOTALL)
         
     def parse(self, input_text: str) -> List[JodiEntry]:
         """
@@ -101,30 +108,42 @@ class JodiTableParser:
         return '\n'.join(cleaned_lines)
     
     def extract_jodi_numbers(self, numbers_text: str) -> List[int]:
-        """Extract jodi numbers from multi-line text"""
+        """Extract jodi numbers from multi-line text with universal separator support"""
         jodi_numbers = []
-        
+
         # Split by lines and process each line
         lines = numbers_text.split('\n')
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
-            # Split by hyphens and extract numbers
-            parts = line.split('-')
-            
-            for part in parts:
-                part = part.strip()
-                if part.isdigit():
-                    jodi_num = int(part)
-                    
-                    # Validate jodi number range (00-99)
-                    if 0 <= jodi_num <= 99:
-                        jodi_numbers.append(jodi_num)
-                    else:
-                        raise ParseError(f"Invalid jodi number: {jodi_num}. Must be between 00 and 99")
+
+            # Use separator handler for universal separator support
+            try:
+                numbers, separators_used = self.separator_handler.extract_numbers_with_separators(line, 'jodi')
+
+                # Filter to valid 2-digit jodi numbers
+                for num in numbers:
+                    if 10 <= num <= 99:  # Valid 2-digit jodi range
+                        jodi_numbers.append(num)
+
+            except Exception as e:
+                self.logger.warning(f"Separator handler failed for jodi line '{line}': {e}")
+
+                # Fallback to manual parsing with dash separator
+                parts = line.split('-')
+
+                for part in parts:
+                    part = part.strip()
+                    if part.isdigit():
+                        jodi_num = int(part)
+
+                        # Validate jodi number range (00-99)
+                        if 0 <= jodi_num <= 99:
+                            jodi_numbers.append(jodi_num)
+                        else:
+                            raise ParseError(f"Invalid jodi number: {jodi_num}. Must be between 00 and 99")
         
         # Remove duplicates while preserving order
         seen = set()

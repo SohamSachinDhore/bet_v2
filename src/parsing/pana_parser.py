@@ -1,18 +1,23 @@
-"""Improved Pana table input parser for Type 1 patterns (128/129/120 = 100)"""
+"""Improved Pana table input parser for Type 1 patterns (128/129/120 = 100) with universal separator support"""
 
 import re
 from typing import List, Set, Optional
 from ..database.models import PanaEntry, ValidationResult
 from ..utils.error_handler import ParseError, ValidationError
 from ..utils.logger import get_logger
+from .separator_utils import UnifiedSeparatorHandler
 
 class PanaTableParser:
-    """Improved Pana table input parser with enhanced pattern recognition"""
-    
+    """Improved Pana table input parser with universal separator support"""
+
     def __init__(self, pana_validator: Optional['PanaValidator'] = None):
         self.validator = pana_validator
-        self.separators = ['/', '+', ' ', ',', '*', '★', '✱','-']
+        self.separator_handler = UnifiedSeparatorHandler()
         self.logger = get_logger(__name__)
+
+        # Get supported separators from unified handler
+        separator_config = self.separator_handler.get_supported_separators('pana')
+        self.separators = separator_config['primary'] + separator_config['secondary']
         
         # Improved patterns for complex PANA formats
         self.pana_patterns = [
@@ -216,13 +221,29 @@ class PanaTableParser:
         return entries
     
     def extract_numbers(self, numbers_text: str) -> List[int]:
-        """Extract 3-digit pana numbers from text"""
+        """Extract 3-digit pana numbers from text using universal separator support"""
         if not numbers_text:
             return []
-        
-        # Find all 3-digit numbers
+
+        # Use separator handler for intelligent extraction
+        try:
+            numbers, separators_used = self.separator_handler.extract_numbers_with_separators(numbers_text, 'pana')
+
+            # Filter to valid 3-digit pana numbers
+            valid_numbers = []
+            for num in numbers:
+                if 100 <= num <= 999:  # Valid 3-digit number range
+                    valid_numbers.append(num)
+
+            if valid_numbers:
+                return valid_numbers
+
+        except Exception as e:
+            self.logger.warning(f"Separator handler failed for pana parsing: {e}")
+
+        # Fallback to regex extraction
         numbers = re.findall(r'\d{3}', numbers_text)
-        
+
         # Convert to integers and validate
         valid_numbers = []
         for num_str in numbers:
@@ -232,7 +253,7 @@ class PanaTableParser:
                     valid_numbers.append(num)
             except ValueError:
                 continue
-        
+
         return valid_numbers
     
     def extract_value_robust(self, value_text: str) -> int:

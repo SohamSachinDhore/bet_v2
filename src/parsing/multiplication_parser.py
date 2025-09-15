@@ -1,20 +1,27 @@
-"""Multiplication input parser for Type 4 patterns (38x700, 83x700)"""
+"""Multiplication input parser for Type 4 patterns (38x700, 83x700) with universal separator support"""
 
 import re
 from typing import List, Optional, Dict, Any
 from ..database.models import MultiEntry, ValidationResult
 from ..utils.error_handler import ParseError, ValidationError
 from ..utils.logger import get_logger
+from .separator_utils import UnifiedSeparatorHandler
 
 class MultiplicationParser:
-    """Multiplication input parser for digit-based multiplication"""
-    
+    """Multiplication input parser for digit-based multiplication with universal separator support"""
+
     def __init__(self, multiplication_validator: Optional['MultiplicationValidator'] = None):
         self.validator = multiplication_validator
         self.logger = get_logger(__name__)
-        
-        # Regex pattern for multiplication format (supports all symbols)
-        self.pattern = re.compile(r'(\d{2})[x\*×X](\d+)', re.IGNORECASE)
+        self.separator_handler = UnifiedSeparatorHandler()
+
+        # Get supported multiplication symbols from unified handler
+        separator_config = self.separator_handler.get_supported_separators('multiplication')
+        all_mult_symbols = separator_config['primary'] + separator_config['secondary']
+        escaped_symbols = [re.escape(sym) for sym in all_mult_symbols]
+
+        # Enhanced regex pattern for multiplication format with universal symbols
+        self.pattern = re.compile(f'(\\d{{2}})[{"".join(escaped_symbols)}](\\d+)', re.IGNORECASE)
     
     def parse(self, input_text: str) -> List[MultiEntry]:
         """

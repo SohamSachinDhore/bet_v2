@@ -1,20 +1,22 @@
-"""Time table input parser for Type 3 patterns (1=100, 0 1 3 5 = 900)"""
+"""Time table input parser for Type 3 patterns (1=100, 0 1 3 5 = 900) with universal separator support"""
 
 import re
 from typing import List, Optional, Dict, Any
 from ..database.models import TimeEntry, ValidationResult
 from ..utils.error_handler import ParseError, ValidationError
 from ..utils.logger import get_logger
+from .separator_utils import UnifiedSeparatorHandler
 
 class TimeTableParser:
-    """Time table input parser for direct column assignments"""
-    
+    """Time table input parser for direct column assignments with universal separator support"""
+
     def __init__(self, time_validator: Optional['TimeTableValidator'] = None):
         self.validator = time_validator
         self.logger = get_logger(__name__)
-        
-        # Regex pattern for time table format (supports single and double equals, currency)
-        self.pattern = re.compile(r'^([0-9\s]+)\s*={1,2}\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)$', re.IGNORECASE)
+        self.separator_handler = UnifiedSeparatorHandler()
+
+        # Enhanced regex pattern for time table format with universal separators
+        self.pattern = re.compile(r'^([0-9\s\,\-\|\:\/\+\*★✱]+)\s*={1,2}\s*(Rs\.{0,3}\s*\.?\s*)?(\d+)$', re.IGNORECASE)
     
     def parse(self, input_text: str) -> List[TimeEntry]:
         """
@@ -91,20 +93,33 @@ class TimeTableParser:
         return line
     
     def parse_line(self, line: str) -> List[TimeEntry]:
-        """Parse single line format: 0 1 3 5 = 900"""
+        """Parse single line format with universal separator support: 0,1,3,5 = 900"""
         match = self.pattern.match(line)
-        
+
         if not match:
             raise ParseError(f"Invalid time table format in line: {line}")
-        
+
         columns_text = match.group(1).strip()
+
+        # Use separator handler to extract numbers with universal separator support
+        try:
+            numbers, separators_used = self.separator_handler.extract_numbers_with_separators(columns_text, 'time')
+            columns = [num for num in numbers if 0 <= num <= 9]  # Filter to valid time columns
+
+            if not columns:
+                # Fallback to manual parsing if separator handler doesn't work
+                columns = self._extract_columns_fallback(columns_text)
+
+        except Exception as e:
+            self.logger.warning(f"Separator handler failed for time parsing: {e}")
+            columns = self._extract_columns_fallback(columns_text)
+
         currency_text = match.group(2) if match.group(2) else ""
         value_text = match.group(3).strip()
-        
-        # Extract column numbers
-        columns = self.extract_columns(columns_text)
+
+        # Extract value
         value = self.extract_value(value_text)
-        
+
         if not columns:
             raise ParseError(f"No valid columns found in: {columns_text}")
         
@@ -121,7 +136,24 @@ class TimeTableParser:
             return [entry]
         except ValueError as e:
             raise ValidationError(f"Invalid time entry {columns}={value}: {e}")
-    
+
+    def _extract_columns_fallback(self, columns_text: str) -> List[int]:
+        """Fallback method for extracting columns with universal separators"""
+        # Normalize separators to spaces first
+        normalized = self.separator_handler.normalize_separators(columns_text, ' ')
+
+        # Extract column numbers
+        columns = []
+        for num_str in normalized.split():
+            try:
+                num = int(num_str)
+                if 0 <= num <= 9:  # Valid time column range
+                    columns.append(num)
+            except ValueError:
+                continue
+
+        return columns
+
     def extract_columns(self, columns_text: str) -> List[int]:
         """Extract column numbers from text, handling both individual digits and numbers"""
         if not columns_text:

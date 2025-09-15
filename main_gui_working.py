@@ -96,7 +96,7 @@ def create_working_main_gui():
             
             if not input_text.strip():
                 dpg.set_value("validation_text", "Status: Ready")
-                dpg.configure_item("preview_area", default_value="Enter data above to see preview...")
+                dpg.configure_item("preview_area", default_value="Enter data above to see preview...\\n\\n✨ Universal Separator Support: Use any separator (, / + * - | : ★) for better flexibility!")
                 return
             
             # Use advanced parsing system
@@ -2947,7 +2947,7 @@ def create_working_main_gui():
                     multiline=True,
                     width=-1,
                     height=400,
-                    hint="Enter your data here...\\n\\nSupported formats:\\n- PANA: 128/129/120 = 100\\n- Type: 1SP=100, 5DP=200\\n- Time: 1=100, 2 4 6=300\\n- Multi: 38x700, 83x500\\n- Jodi: 22-24-26\\n42-44-46=500",
+                    hint="Enter your data here...\\n\\nSupported formats (any separator: / + , * - | : ★):\\n- PANA: 128/129/120 = 100 or 128,129,120 = 100\\n- Type: 1SP=100, 5DP=200\\n- Time: 1=100 or 1,2,3=300\\n- Multi: 38x700, 38*700, 38×700\\n- Jodi: 22-24-26 or 22:24:26 = 500",
                     callback=on_input_change,
                     tab_input=False  # Disable tab character insertion
                 )
@@ -2984,7 +2984,7 @@ def create_working_main_gui():
                 
                 with dpg.child_window(height=400, horizontal_scrollbar=True, border=True, tag="preview_window"):
                     dpg.add_text(
-                        "Enter data above to see preview...",
+                        "Enter data above to see preview...\\n\\n✨ Universal Separator Support: Use any separator (, / + * - | : ★) for better flexibility!",
                         tag="preview_area",
                         wrap=480  # Set wrap width for better text display
                     )
