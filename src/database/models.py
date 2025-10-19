@@ -207,13 +207,13 @@ class TypeEntry:
 @dataclass
 class TimeEntry:
     """Parsed time table entry"""
-    columns: List[int]  # List of column numbers (0-9)
+    columns: List[int]  # List of column numbers (0-99, extended range)
     value: int
     
     def __post_init__(self):
         for col in self.columns:
-            if not (0 <= col <= 9):
-                raise ValueError(f"Invalid column number: {col}")
+            if not (0 <= col <= 99):
+                raise ValueError(f"Invalid column number: {col}. Must be between 0 and 99")
         if self.value < 0:
             raise ValueError(f"Invalid value: {self.value}")
 

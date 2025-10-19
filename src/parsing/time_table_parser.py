@@ -104,7 +104,8 @@ class TimeTableParser:
         # Use separator handler to extract numbers with universal separator support
         try:
             numbers, separators_used = self.separator_handler.extract_numbers_with_separators(columns_text, 'time')
-            columns = [num for num in numbers if 0 <= num <= 9]  # Filter to valid time columns
+            # Extended time column range to support both single and double digits
+            columns = [num for num in numbers if 0 <= num <= 99]  # Allow 0-99 for time columns
 
             if not columns:
                 # Fallback to manual parsing if separator handler doesn't work
@@ -126,10 +127,10 @@ class TimeTableParser:
         if value <= 0:
             raise ParseError(f"Invalid value: {value}")
         
-        # Validate all columns are in range 0-9
+        # Validate all columns are in range 0-99 (extended range)
         for col in columns:
-            if not (0 <= col <= 9):
-                raise ValidationError(f"Invalid column number: {col}. Must be between 0 and 9")
+            if not (0 <= col <= 99):
+                raise ValidationError(f"Invalid column number: {col}. Must be between 0 and 99")
         
         try:
             entry = TimeEntry(columns=columns, value=value)
@@ -147,7 +148,7 @@ class TimeTableParser:
         for num_str in normalized.split():
             try:
                 num = int(num_str)
-                if 0 <= num <= 9:  # Valid time column range
+                if 0 <= num <= 99:  # Extended time column range for 2-digit support
                     columns.append(num)
             except ValueError:
                 continue
@@ -169,20 +170,32 @@ class TimeTableParser:
         for part in parts:
             part = part.strip()
             if part.isdigit():
-                # Check if it's a single digit (0-9) for column or multi-digit number
-                if len(part) == 1:
+                # Check if it's a 1-2 digit number (0-99) for column or multi-digit number
+                if len(part) <= 2:
                     col = int(part)
-                    if 0 <= col <= 9:
+                    if 0 <= col <= 99:
                         columns.append(col)
                     else:
-                        raise ValidationError(f"Invalid column number: {col}. Must be between 0 and 9")
+                        raise ValidationError(f"Invalid column number: {col}. Must be between 0 and 99")
                 else:
                     # Multi-digit number - treat each digit as separate column
-                    for digit_char in part:
-                        if digit_char.isdigit():
-                            col = int(digit_char)
-                            if 0 <= col <= 9:
-                                columns.append(col)
+                    # For 3+ digit numbers, treat as separate 2-digit numbers
+                    # For example: 123 becomes [12, 23] or [1, 2, 3] based on context
+                    if len(part) == 3:
+                        # Try to break into two 2-digit and one 1-digit
+                        first_two = int(part[:2])
+                        last_one = int(part[2:])
+                        if 0 <= first_two <= 99:
+                            columns.append(first_two)
+                        if 0 <= last_one <= 99:
+                            columns.append(last_one)
+                    else:
+                        # Fallback to individual digits
+                        for digit_char in part:
+                            if digit_char.isdigit():
+                                col = int(digit_char)
+                                if 0 <= col <= 99:
+                                    columns.append(col)
         
         # Remove duplicates while preserving order
         seen = set()

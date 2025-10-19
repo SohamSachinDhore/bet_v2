@@ -21,8 +21,12 @@ class JodiTableParser:
         escaped_seps = [re.escape(sep) for sep in all_jodi_seps]
 
         # Enhanced pattern for jodi format with universal separators
-        separator_pattern = f'[{"".join(escaped_seps)}]'
-        self.jodi_pattern = re.compile(f'^([0-9{separator_pattern}\\s\\n]+)\\s*=\\s*(\\d+)$', re.MULTILINE | re.DOTALL)
+        # Simple pattern that matches numbers with any of the jodi separators
+        # Multi-line pattern (traditional jodi format)
+        self.jodi_pattern = re.compile(r'^([0-9\-:\|\s\n,+/]+)\s*=\s*(\d+)$', re.MULTILINE | re.DOTALL)
+
+        # Single-line pattern for mixed entries (22-23-24=100)
+        self.single_line_pattern = re.compile(r'^([0-9\-:\|\s,+/]+)\s*=\s*(\d+)$')
         
     def parse(self, input_text: str) -> List[JodiEntry]:
         """
@@ -49,41 +53,20 @@ class JodiTableParser:
         try:
             # Preprocess input
             input_text = self.preprocess_input(input_text)
-            
-            # Match the jodi pattern
-            match = self.jodi_pattern.match(input_text)
-            if not match:
-                raise ParseError(f"Invalid jodi format. Expected format: jodi numbers on separate lines ending with =value")
-            
-            numbers_text = match.group(1).strip()
-            value_text = match.group(2).strip()
-            
-            # Extract jodi numbers from all lines
-            jodi_numbers = self.extract_jodi_numbers(numbers_text)
-            value = self.extract_value(value_text)
-            
-            if not jodi_numbers:
-                raise ParseError("No valid jodi numbers found")
-            
-            if value <= 0:
-                raise ParseError(f"Invalid value: {value}")
-            
-            # Create single JodiEntry with all numbers
-            try:
-                entry = JodiEntry(jodi_numbers=jodi_numbers, value=value)
-                entries = [entry]
-            except ValueError as e:
-                raise ValidationError(f"Invalid jodi entry: {e}")
-            
-            # Validate if validator is provided
-            if self.validator:
-                validated_entries = self.validator.validate_entries(entries)
-                self.logger.info(f"Successfully parsed and validated {len(validated_entries)} jodi entries")
-                return validated_entries
-            else:
-                self.logger.info(f"Successfully parsed {len(entries)} jodi entries")
-                return entries
-            
+
+            # Try single-line pattern first (for mixed entries)
+            single_match = self.single_line_pattern.match(input_text.strip())
+            if single_match:
+                return self._parse_single_line(single_match)
+
+            # Try multi-line pattern (traditional jodi format)
+            multi_match = self.jodi_pattern.match(input_text)
+            if multi_match:
+                return self._parse_multi_line(multi_match)
+
+            # Try parsing as individual lines for mixed format
+            return self._parse_individual_lines(input_text)
+
         except Exception as e:
             self.logger.error(f"Jodi table parsing failed: {e}")
             raise ParseError(f"Failed to parse jodi table input: {str(e)}")
@@ -123,16 +106,23 @@ class JodiTableParser:
             try:
                 numbers, separators_used = self.separator_handler.extract_numbers_with_separators(line, 'jodi')
 
-                # Filter to valid 2-digit jodi numbers
+                # Filter to valid jodi numbers (0-99, including single digits as 00-09)
                 for num in numbers:
-                    if 10 <= num <= 99:  # Valid 2-digit jodi range
+                    if 0 <= num <= 99:  # Valid jodi range (00-99)
                         jodi_numbers.append(num)
 
             except Exception as e:
                 self.logger.warning(f"Separator handler failed for jodi line '{line}': {e}")
 
-                # Fallback to manual parsing with dash separator
-                parts = line.split('-')
+                # Fallback to manual parsing with all jodi separators
+                # Try different separators in order of preference
+                separators_to_try = ['-', ':', '|', ' ', ',', '+', '/']
+                parts = [line]  # Default to whole line
+
+                for sep in separators_to_try:
+                    if sep in line:
+                        parts = line.split(sep)
+                        break
 
                 for part in parts:
                     part = part.strip()
@@ -154,6 +144,89 @@ class JodiTableParser:
                 unique_numbers.append(num)
         
         return unique_numbers
+
+    def _parse_single_line(self, match) -> List[JodiEntry]:
+        """Parse single-line jodi format: 12/13/14/15=300"""
+        numbers_text = match.group(1).strip()
+        value_text = match.group(2).strip()
+
+        # Extract jodi numbers
+        jodi_numbers = self.extract_jodi_numbers(numbers_text)
+        value = self.extract_value(value_text)
+
+        if not jodi_numbers:
+            raise ParseError("No valid jodi numbers found")
+
+        if value <= 0:
+            raise ParseError(f"Invalid value: {value}")
+
+        # Create JodiEntry
+        try:
+            entry = JodiEntry(jodi_numbers=jodi_numbers, value=value)
+            entries = [entry]
+        except ValueError as e:
+            raise ValidationError(f"Invalid jodi entry: {e}")
+
+        # Validate if validator is provided
+        if self.validator:
+            validated_entries = self.validator.validate_entries(entries)
+            self.logger.info(f"Successfully parsed and validated {len(validated_entries)} single-line jodi entries")
+            return validated_entries
+        else:
+            self.logger.info(f"Successfully parsed {len(entries)} single-line jodi entries")
+            return entries
+
+    def _parse_multi_line(self, match) -> List[JodiEntry]:
+        """Parse multi-line jodi format (traditional)"""
+        numbers_text = match.group(1).strip()
+        value_text = match.group(2).strip()
+
+        # Extract jodi numbers from all lines
+        jodi_numbers = self.extract_jodi_numbers(numbers_text)
+        value = self.extract_value(value_text)
+
+        if not jodi_numbers:
+            raise ParseError("No valid jodi numbers found")
+
+        if value <= 0:
+            raise ParseError(f"Invalid value: {value}")
+
+        # Create JodiEntry
+        try:
+            entry = JodiEntry(jodi_numbers=jodi_numbers, value=value)
+            entries = [entry]
+        except ValueError as e:
+            raise ValidationError(f"Invalid jodi entry: {e}")
+
+        # Validate if validator is provided
+        if self.validator:
+            validated_entries = self.validator.validate_entries(entries)
+            self.logger.info(f"Successfully parsed and validated {len(validated_entries)} multi-line jodi entries")
+            return validated_entries
+        else:
+            self.logger.info(f"Successfully parsed {len(entries)} multi-line jodi entries")
+            return entries
+
+    def _parse_individual_lines(self, input_text: str) -> List[JodiEntry]:
+        """Parse individual lines that might be jodi format"""
+        lines = [line.strip() for line in input_text.strip().split('\n') if line.strip()]
+        all_entries = []
+
+        for line in lines:
+            # Try to parse each line as single jodi format
+            single_match = self.single_line_pattern.match(line)
+            if single_match:
+                try:
+                    line_entries = self._parse_single_line(single_match)
+                    all_entries.extend(line_entries)
+                except Exception as e:
+                    self.logger.warning(f"Failed to parse jodi line '{line}': {e}")
+
+        if not all_entries:
+            raise ParseError("No valid jodi entries found in individual lines")
+
+        self.logger.info(f"Successfully parsed {len(all_entries)} individual jodi entries")
+        return all_entries
     
     def extract_value(self, value_text: str) -> int:
         """Extract numeric value from text"""

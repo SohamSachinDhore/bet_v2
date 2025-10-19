@@ -230,14 +230,15 @@ class PatternDetector:
     def _is_jodi_table_format(self, input_text: str) -> bool:
         """Check if input matches JODI table multi-line format"""
         lines = [line.strip() for line in input_text.strip().split('\n') if line.strip()]
-        
+
         if len(lines) < 2:
             return False
-        
+
         # Check for classic JODI pattern: multiple lines of hyphen-separated numbers ending with =value
         jodi_number_lines = 0
         value_line_found = False
-        
+        mixed_pattern_detected = False
+
         for line in lines:
             # Check if line contains hyphen-separated 2-digit numbers
             if re.match(r'^\d{2}(-\d{2})+$', line):
@@ -246,10 +247,30 @@ class PatternDetector:
             elif re.match(r'^=\s*\d+$', line):
                 value_line_found = True
             # Check if line ends with =value
-            elif re.match(r'.*=\s*\d+$', line) and '-' in line:
-                jodi_number_lines += 1
-                value_line_found = True
-        
+            elif re.match(r'.*=\s*\d+$', line):
+                # Extract numbers before the = sign to validate pattern
+                numbers_part = line.split('=')[0].strip()
+                numbers = re.findall(r'\d+', numbers_part)
+
+                # Check if all numbers are 2-digit and uses jodi separators
+                all_two_digit = all(len(num) == 2 for num in numbers)
+                has_jodi_separators = any(sep in numbers_part for sep in ['-', ':', '|'])
+                has_non_jodi_separators = any(sep in numbers_part for sep in ['/', '+', ',', '*'])
+
+                # Check for 3-digit numbers (pana pattern)
+                has_three_digit = any(len(num) == 3 for num in numbers)
+
+                if all_two_digit and has_jodi_separators and not has_non_jodi_separators:
+                    jodi_number_lines += 1
+                    value_line_found = True
+                elif has_three_digit or has_non_jodi_separators:
+                    # This looks like a mixed pattern (pana, time, etc.)
+                    mixed_pattern_detected = True
+
+        # Don't classify as jodi table if mixed patterns detected
+        if mixed_pattern_detected:
+            return False
+
         # Must have at least 1 jodi number line and 1 value indicator
         return jodi_number_lines >= 1 and (value_line_found or lines[-1].startswith('='))
     

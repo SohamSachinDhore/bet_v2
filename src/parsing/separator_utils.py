@@ -34,7 +34,7 @@ class UnifiedSeparatorHandler:
         'time': {
             'primary': [' ', ',', '-'],
             'secondary': ['|', ':', '+', '/'],
-            'number_length': [1],  # Single digit numbers (0-9)
+            'number_length': [1, 2],  # Single and double digit numbers (0-99)
             'min_numbers': 1,      # Can be single number
         },
         'jodi': {
@@ -120,7 +120,53 @@ class UnifiedSeparatorHandler:
         if not numbers:
             return 0.0, []
 
-        # Special handling for direct assignment patterns (number=value)
+        # Special handling for assignment patterns with multiple numbers (12/13/14/15=300)
+        multiple_numbers_assignment = r'^\s*\d+([^\d=]+\d+)+\s*=\s*\d+\s*$'
+        is_multiple_assignment = re.match(multiple_numbers_assignment, text)
+
+        if is_multiple_assignment:
+            # For multiple number assignments, prioritize based on number lengths and separators
+            if parser_type == 'pana':
+                # Pana should have 3-digit numbers
+                three_digit_count = sum(1 for num in numbers[:-1] if len(num) == 3)  # Exclude value
+                if three_digit_count > 0:
+                    score += 0.3 * (three_digit_count / (len(numbers) - 1))
+            elif parser_type == 'time':
+                # Time should have 1-digit numbers, but 2-digit can also be valid (like 12)
+                one_digit_count = sum(1 for num in numbers[:-1] if len(num) == 1)  # Exclude value
+                two_digit_count = sum(1 for num in numbers[:-1] if len(num) == 2)  # 2-digit numbers
+
+                if one_digit_count > 0:
+                    score += 0.4 * (one_digit_count / (len(numbers) - 1))
+                # 2-digit numbers could be time columns (10, 11, 12 etc.) with modest boost
+                elif two_digit_count > 0:
+                    # Check if they look like time columns (10-19 range suggests time)
+                    valid_time_nums = sum(1 for num in numbers[:-1] if len(num) == 2 and 10 <= int(num) <= 19)
+
+                    # For small sequences with 2-digit numbers, boost time significantly
+                    small_sequence_boost = 0.3 if len(numbers) <= 3 else 0.0
+
+                    if valid_time_nums > 0:
+                        score += (0.3 + small_sequence_boost) * (valid_time_nums / (len(numbers) - 1))
+                    else:
+                        # General 2-digit boost for time with small sequence preference
+                        score += (0.2 + small_sequence_boost) * (two_digit_count / (len(numbers) - 1))
+            elif parser_type == 'jodi':
+                # Jodi should have 2-digit numbers with jodi separators
+                two_digit_count = sum(1 for num in numbers[:-1] if len(num) == 2)  # Exclude value
+                has_jodi_sep = any(sep in text for sep in ['-', ':', '|'])
+                has_non_jodi_sep = any(sep in text for sep in ['/', '+', ',', '*'])
+
+                if two_digit_count > 0 and has_jodi_sep and not has_non_jodi_sep:
+                    # For small sequences (2-3 numbers), prefer time over jodi
+                    if len(numbers) <= 3:  # Small sequences likely time, not jodi
+                        score += 0.2 * (two_digit_count / (len(numbers) - 1))
+                    else:  # Larger sequences likely jodi
+                        score += 0.4 * (two_digit_count / (len(numbers) - 1))
+                elif has_non_jodi_sep:
+                    score -= 0.5  # Strong penalty for jodi with non-jodi separators
+
+        # Special handling for simple direct assignment patterns (number=value)
         direct_assignment_pattern = r'^\s*\d{1,3}\s*=\s*\d+\s*$'
         is_direct_assignment = re.match(direct_assignment_pattern, text)
 
