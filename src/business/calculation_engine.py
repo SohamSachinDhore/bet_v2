@@ -48,13 +48,13 @@ class BusinessCalculation:
 
 class CalculationEngine:
     """Core calculation engine for all business logic"""
-    
+
     def __init__(self, sp_table: Dict[int, Set[int]] = None,
                  dp_table: Dict[int, Set[int]] = None,
                  cp_table: Dict[int, Set[int]] = None):
         """
         Initialize calculation engine with type table references
-        
+
         Args:
             sp_table: SP table mapping {column: {valid_numbers}}
             dp_table: DP table mapping {column: {valid_numbers}}
@@ -64,6 +64,25 @@ class CalculationEngine:
         self.dp_table = dp_table or {}
         self.cp_table = cp_table or {}
         self.logger = get_logger(__name__)
+
+    @staticmethod
+    def _is_triplet(number: int) -> bool:
+        """
+        Check if a 3-digit pana number is a triplet (all digits same).
+
+        Triplets: 111, 222, 333, 444, 555, 666, 777, 888, 999, 000
+
+        Args:
+            number: 3-digit pana number
+
+        Returns:
+            True if all three digits are the same
+        """
+        # Convert to 3-digit string with leading zeros
+        num_str = str(number).zfill(3)
+
+        # Check if all digits are the same
+        return num_str[0] == num_str[1] == num_str[2]
     
     def calculate_total(self, parsed_entries: ParsedInputResult) -> CalculationResult:
         """
@@ -233,13 +252,21 @@ class CalculationEngine:
             # Get numbers from appropriate table
             if entry.table_type == 'SP':
                 numbers = self.sp_table.get(entry.column, set())
-            elif entry.table_type == 'DP':
+            elif entry.table_type in ['DP', 'DPT']:
                 numbers = self.dp_table.get(entry.column, set())
+
+                # DP excludes triplets, DPT includes them
+                if entry.table_type == 'DP':
+                    # Filter out triplets (111, 222, 333, etc.)
+                    numbers = {num for num in numbers if not self._is_triplet(num)}
+                    self.logger.debug(f"DP column {entry.column}: Excluded triplets, {len(numbers)} numbers remain")
+                # DPT keeps all numbers including triplets (no filtering needed)
+
             elif entry.table_type == 'CP':
                 numbers = self.cp_table.get(entry.column, set())
             else:
                 numbers = set()
-            
+
             if not numbers:
                 self.logger.warning(f"No numbers found for {entry.table_type} column {entry.column}")
                 continue
@@ -548,13 +575,20 @@ class CalculationEngine:
             # Get numbers from appropriate table
             if entry.table_type == 'SP':
                 numbers = self.sp_table.get(entry.column, set())
-            elif entry.table_type == 'DP':
+            elif entry.table_type in ['DP', 'DPT']:
                 numbers = self.dp_table.get(entry.column, set())
+
+                # DP excludes triplets, DPT includes them
+                if entry.table_type == 'DP':
+                    # Filter out triplets (111, 222, 333, etc.)
+                    numbers = {num for num in numbers if not self._is_triplet(num)}
+                # DPT keeps all numbers including triplets (no filtering needed)
+
             elif entry.table_type == 'CP':
                 numbers = self.cp_table.get(entry.column, set())
             else:
                 numbers = set()
-            
+
             # If no actual table data, use default sizes for calculation
             if not numbers and not self.sp_table and not self.dp_table and not self.cp_table:
                 # Use default table sizes when tables are not loaded

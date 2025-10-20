@@ -173,33 +173,33 @@ class PanaEntry:
 class TypeTableEntry:
     """Type table entry data model (for TypeTableParser)"""
     column: int
-    table_type: str  # SP, DP, or CP
+    table_type: str  # SP, DP, DPT, or CP
     value: int
-    
+
     def __post_init__(self):
-        if self.table_type not in ['SP', 'DP', 'CP']:
+        if self.table_type not in ['SP', 'DP', 'DPT', 'CP']:
             raise ValueError(f"Invalid table type: {self.table_type}")
         if self.value < 0:
             raise ValueError(f"Invalid value: {self.value}")
-        
+
         # Validate column ranges based on table type
         if self.table_type == 'SP' and not (1 <= self.column <= 10):
             raise ValueError(f"SP column must be 1-10, got: {self.column}")
-        elif self.table_type == 'DP' and not (1 <= self.column <= 10):
-            raise ValueError(f"DP column must be 1-10, got: {self.column}")
+        elif self.table_type in ['DP', 'DPT'] and not (1 <= self.column <= 10):
+            raise ValueError(f"{self.table_type} column must be 1-10, got: {self.column}")
         elif self.table_type == 'CP' and not ((11 <= self.column <= 99) or self.column == 0):
             raise ValueError(f"CP column must be 11-99 or 0, got: {self.column}")
 
 @dataclass
 class TypeEntry:
     """Parsed type table entry"""
-    table_type: str  # SP, DP, or CP
+    table_type: str  # SP, DP, DPT, or CP
     column: int
     value: int
     numbers: List[int] = field(default_factory=list)
-    
+
     def __post_init__(self):
-        if self.table_type not in ['SP', 'DP', 'CP']:
+        if self.table_type not in ['SP', 'DP', 'DPT', 'CP']:
             raise ValueError(f"Invalid table type: {self.table_type}")
         if self.value < 0:
             raise ValueError(f"Invalid value: {self.value}")

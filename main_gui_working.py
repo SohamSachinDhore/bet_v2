@@ -102,8 +102,7 @@ def create_working_main_gui():
             # Use advanced parsing system
             try:
                 from src.business.calculation_engine import CalculationEngine, CalculationContext
-                from src.parsing.mixed_input_parser import MixedInputParser
-                from src.parsing.type_table_parser import TypeTableLoader
+                from src.parsing.parser_adapter import MixedInputParser, TypeTableLoader
                 from datetime import date
                 
                 # Create parser
@@ -340,8 +339,7 @@ def create_working_main_gui():
                     # Parse input using advanced parsing system
                     try:
                         from src.business.calculation_engine import CalculationEngine, CalculationContext
-                        from src.parsing.mixed_input_parser import MixedInputParser
-                        from src.parsing.type_table_parser import TypeTableLoader
+                        from src.parsing.parser_adapter import MixedInputParser, TypeTableLoader
                         from datetime import date
                         
                         # Create parser
