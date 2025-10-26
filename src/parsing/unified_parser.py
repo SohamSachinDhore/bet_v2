@@ -60,13 +60,15 @@ class UnifiedParser:
 
     def _preprocess_multiline_values(self, text: str) -> str:
         """
-        Preprocess text to combine lines where value is on next line.
+        Preprocess text to combine lines that are part of the same logical entry.
 
         Handles cases like:
         - 5DP\n=100 → 5DP=100
         - 5DP\n100 → 5DP=100
         - 1/2/3\n=5000 → 1/2/3=5000
         - 1/2/3\n5000 → 1/2/3=5000
+        - 1+\n2+3=500 → 1+2+3=500
+        - 1*\n2=200 → 1*2=200
         - Also handles empty lines between numbers and values
 
         Args:
@@ -80,7 +82,8 @@ class UnifiedParser:
         i = 0
 
         while i < len(lines):
-            current_line = lines[i].strip()
+            current_line_raw = lines[i]
+            current_line = current_line_raw.strip()
 
             # Skip empty lines
             if not current_line:
@@ -88,82 +91,205 @@ class UnifiedParser:
                 i += 1
                 continue
 
-            # Check if current line has =
+            # Check if current line has = (complete entry)
             if '=' in current_line:
                 # Line is complete, just add it
                 combined_lines.append(current_line)
                 i += 1
                 continue
 
-            # Current line doesn't have =, find next non-empty line
+            # Current line doesn't have =, need to combine with following lines
+            # Keep combining until we find = or a pure value
+            combined = current_line
+
+            # Check if original line had trailing space (used as separator)
+            had_trailing_space = current_line_raw != current_line_raw.rstrip() and current_line_raw.rstrip() == current_line
+
             next_idx = i + 1
-            next_line = None
-            empty_lines_count = 0
+            empty_lines_before_value = 0
 
-            # Skip empty lines to find next non-empty line
+            last_potential_value = None
+            last_potential_value_idx = None
+
             while next_idx < len(lines):
-                potential_next = lines[next_idx].strip()
-                if potential_next:
-                    next_line = potential_next
-                    break
-                empty_lines_count += 1
-                next_idx += 1
+                next_line_raw = lines[next_idx]
+                next_line = next_line_raw.strip()
 
-            # Check if next non-empty line starts with = or is just a number
-            if next_line:
+                # Skip empty lines but track them
+                if not next_line:
+                    empty_lines_before_value += 1
+                    next_idx += 1
+                    continue
+
+                # Check if next line completes the entry
                 if next_line.startswith('='):
-                    # Combine: "5DP" + "=100" → "5DP=100"
-                    combined_lines.append(current_line + next_line)
-                    # Add empty lines we skipped
-                    for _ in range(empty_lines_count):
+                    # Found value with =: "numbers" + "=value"
+                    combined += next_line
+                    combined_lines.append(combined)
+                    # Add back empty lines we skipped
+                    for _ in range(empty_lines_before_value):
                         combined_lines.append('')
                     i = next_idx + 1
-                    continue
+                    break
                 elif self._is_pure_value(next_line):
-                    # Combine: "5DP" + "100" → "5DP=100"
-                    combined_lines.append(current_line + '=' + next_line)
-                    # Add empty lines we skipped
-                    for _ in range(empty_lines_count):
+                    # Found pure value: "numbers" + "value"
+                    combined += '=' + next_line
+                    combined_lines.append(combined)
+                    # Add back empty lines we skipped
+                    for _ in range(empty_lines_before_value):
                         combined_lines.append('')
                     i = next_idx + 1
-                    continue
+                    break
+                else:
+                    # Next line is more numbers/separators, combine them
+                    # But keep track of it as potential value if it's a plain number
+                    if self._could_be_value(next_line):
+                        last_potential_value = next_line
+                        last_potential_value_idx = next_idx
 
-            # If we reach here, current line stands alone (might be error)
-            combined_lines.append(current_line)
-            i += 1
+                    # Add space if previous line had trailing space (space separator)
+                    if had_trailing_space:
+                        combined += ' '
+                        had_trailing_space = False  # Reset after using
+
+                    combined += next_line
+
+                    # Check if this line has trailing space for next iteration
+                    had_trailing_space = next_line_raw != next_line_raw.rstrip() and next_line_raw.rstrip() == next_line
+
+                    empty_lines_before_value = 0  # Reset since we found content
+                    next_idx += 1
+            else:
+                # Reached end of input
+                # If the last thing we combined could be a value, treat it as such
+                if last_potential_value and last_potential_value_idx:
+                    # Remove the last potential value from combined and treat it as value
+                    combined = combined[:-(len(last_potential_value))]
+                    combined += '=' + last_potential_value
+
+                combined_lines.append(combined)
+                i = next_idx
 
         return '\n'.join(combined_lines)
 
     def _is_pure_value(self, text: str) -> bool:
         """
-        Check if text looks like a pure value (just number, possibly with currency).
+        Check if text looks like a pure value (not part of number sequence).
 
         Examples that return True:
-        - "100"
-        - "5000"
-        - "RS 100"
-        - "₹5000"
-        - "5,000"
+        - "5000" (larger number likely a value)
+        - "RS 100" (has currency)
+        - "₹5000" (has currency)
+        - "5,000" (has comma formatting in middle)
 
         Examples that return False:
+        - "1" (single digit, likely part of sequence)
+        - "12" (small number, could be part of sequence)
+        - "2," (trailing comma, part of sequence)
         - "1/2/3" (contains separators)
         - "5DP" (contains letters)
-        - "123-456" (multiple numbers)
+        - "123" (could be a pana number in sequence)
 
         Args:
             text: Text to check
 
         Returns:
-            True if text looks like a pure value
+            True if text looks like a standalone value
         """
-        # Remove common currency symbols and commas
-        cleaned = text.upper().replace('RS', '').replace('₹', '').replace(',', '').strip()
+        # Check for currency symbols (strong indicator of value)
+        has_currency = 'RS' in text.upper() or '₹' in text
 
-        # Check if remaining text is just digits (possibly with spaces)
+        if has_currency:
+            return True
+
+        # Check for trailing comma (indicates part of sequence, not a value)
+        if text.rstrip().endswith(','):
+            return False
+
+        # Check for comma formatting (e.g., "5,000")
+        # Comma should be internal to the number, not at the edges
+        has_comma_formatting = ',' in text and not text.startswith(',') and not text.endswith(',')
+
+        if has_comma_formatting:
+            # Verify it's actually number formatting, not separator usage
+            # Remove commas and check if remaining text is digits
+            cleaned_for_comma_check = text.replace(',', '').strip()
+            if cleaned_for_comma_check.isdigit() and len(cleaned_for_comma_check) >= 4:
+                return True
+
+        # Remove currency and commas for further checking
+        cleaned = text.upper().replace('RS', '').replace('₹', '').replace(',', '').strip()
         cleaned_no_spaces = cleaned.replace(' ', '')
 
-        # Should be all digits and not empty
-        return cleaned_no_spaces.isdigit() and len(cleaned_no_spaces) > 0
+        # Must be all digits
+        if not cleaned_no_spaces.isdigit():
+            return False
+
+        # Empty is not a value
+        if len(cleaned_no_spaces) == 0:
+            return False
+
+        # Small numbers (1-3 digits) without currency are ambiguous
+        # Treat them as part of sequence, not values
+        # Only 4+ digit numbers are clearly values
+        if len(cleaned_no_spaces) <= 3:
+            return False
+
+        return True
+
+    def _could_be_value(self, text: str) -> bool:
+        """
+        Check if text could potentially be a value at end of sequence.
+        More permissive than _is_pure_value() - allows smaller numbers.
+
+        This is used to identify potential values when we reach end of input
+        without finding an explicit '=' sign. For example, in "12-13-14 500",
+        "500" could be the value even though it's a small number.
+
+        Examples that return True:
+        - "500" (could be value at end)
+        - "100" (could be value at end)
+        - "5000" (definitely a value)
+        - "5,000" (formatted with commas)
+
+        Examples that return False:
+        - "1/2/3" (contains separators, part of sequence)
+        - "2," (ends with separator, part of sequence)
+        - "5DP" (contains letters, not a plain number)
+        - "" (empty string)
+
+        Args:
+            text: Text to check
+
+        Returns:
+            True if text could be a value at end of sequence
+        """
+        # Check for number separators (excluding commas which can be in values)
+        # If text contains these, it's part of a sequence, not a standalone value
+        separators = ['/', '-', '*', '+', ':', '|']
+        for sep in separators:
+            if sep in text:
+                return False
+
+        # If text ends with a comma, it's part of a sequence (e.g., "2,")
+        if text.rstrip().endswith(','):
+            return False
+
+        # Remove currency and commas for validation
+        cleaned = text.upper().replace('RS', '').replace('₹', '').replace(',', '').strip()
+        cleaned_no_spaces = cleaned.replace(' ', '')
+
+        # Must be all digits
+        if not cleaned_no_spaces.isdigit():
+            return False
+
+        # Empty is not a value
+        if len(cleaned_no_spaces) == 0:
+            return False
+
+        # Any plain number could be a value if at end of sequence
+        # This is more permissive than _is_pure_value()
+        return True
 
     def parse(self, text: str) -> Dict:
         """
