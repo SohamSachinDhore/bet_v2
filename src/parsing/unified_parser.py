@@ -33,6 +33,16 @@ class TypeTableEntry:
         return f"{self.table_type}(col={self.column}, value={self.value})"
 
 
+@dataclass
+class FamilyPanaEntry:
+    """Family pana entry (expands to multiple pana numbers)"""
+    reference_number: int  # Pana number to lookup (e.g., 678)
+    value: int
+
+    def __repr__(self):
+        return f"FAMILY({self.reference_number}={self.value})"
+
+
 class UnifiedParser:
     """
     Simplified parser that classifies entries by number length.
@@ -315,7 +325,8 @@ class UnifiedParser:
             'time_entries': [],
             'jodi_entries': [],
             'pana_entries': [],
-            'type_entries': []
+            'type_entries': [],
+            'family_pana_entries': []
         }
 
         if not text or not text.strip():
@@ -346,6 +357,8 @@ class UnifiedParser:
                     for entry in line_results:
                         if isinstance(entry, TypeTableEntry):
                             results['type_entries'].append(entry)
+                        elif isinstance(entry, FamilyPanaEntry):
+                            results['family_pana_entries'].append(entry)
                         else:
                             results['entries'].append(entry)
 
@@ -363,7 +376,7 @@ class UnifiedParser:
                 results['success'] = False
 
         # Final success check
-        if not results['entries'] and not results['type_entries'] and not results['errors']:
+        if not results['entries'] and not results['type_entries'] and not results['family_pana_entries'] and not results['errors']:
             results['success'] = False
             results['errors'].append("No valid entries found")
 
@@ -408,28 +421,68 @@ class UnifiedParser:
         # Extract value
         value = self._extract_value(value_part)
 
+        # Check if this is a family pana entry (678family=200)
+        family_entry = self._parse_family_pana_entry(numbers_part, value)
+        if family_entry:
+            return [family_entry]
+
         # Check if this is a type table entry (SP/DP/CP)
         type_entries = self._parse_type_table_entries(numbers_part, value)
         if type_entries:
             return type_entries
 
         # Otherwise, extract regular numbers
-        numbers = self._extract_numbers(numbers_part)
+        number_strings = self._extract_numbers(numbers_part)
 
-        if not numbers:
+        if not number_strings:
             raise ValueError(f"No valid numbers found")
 
-        # Create entries based on number length
+        # Create entries based on number string length
         entries = []
-        for number in numbers:
-            entry_type = self._classify_by_length(number)
+        for num_str in number_strings:
+            entry_type, num_value = self._classify_by_length(num_str)
             entries.append(ParsedEntry(
-                number=number,
+                number=num_value,  # Store as integer
                 value=value,
                 entry_type=entry_type
             ))
 
         return entries
+
+    def _parse_family_pana_entry(self, text: str, value: int) -> Optional[FamilyPanaEntry]:
+        """
+        Parse family pana entry (678family=200).
+
+        Format: NUMBER+family
+        Examples:
+        - 678family (reference pana number 678 in family table)
+        - 123FAMILY (case insensitive)
+
+        Args:
+            text: Text containing family pana specification
+            value: Value to assign to all pana numbers in that family
+
+        Returns:
+            FamilyPanaEntry object, or None if not family format
+        """
+        # Pattern to match: 3-digit NUMBER + "family" (case insensitive)
+        family_pattern = r'^(\d{3})(family|FAMILY|Family)$'
+
+        match = re.match(family_pattern, text.strip())
+
+        if not match:
+            return None
+
+        reference_number = int(match.group(1))
+
+        # Validate it's a valid 3-digit pana number
+        if not (100 <= reference_number <= 999):
+            raise ValueError(f"Family pana reference must be 100-999, got: {reference_number}")
+
+        return FamilyPanaEntry(
+            reference_number=reference_number,
+            value=value
+        )
 
     def _parse_type_table_entries(self, text: str, value: int) -> Optional[List[TypeTableEntry]]:
         """
@@ -482,9 +535,10 @@ class UnifiedParser:
 
         return entries if entries else None
 
-    def _extract_numbers(self, text: str) -> List[int]:
+    def _extract_numbers(self, text: str) -> List[str]:
         """
         Extract all numbers from text using separator patterns.
+        Returns numbers as strings to preserve leading zeros (e.g., "05" for jodi).
 
         Supports: 1*2*3, 1/2/3, 1-2-3, 1,2,3, 1|2|3, etc.
 
@@ -492,7 +546,7 @@ class UnifiedParser:
             text: Text containing numbers and separators
 
         Returns:
-            List of extracted numbers
+            List of extracted number strings (preserves leading zeros)
         """
         # Split by all supported separators
         parts = re.split(self.separators_pattern, text)
@@ -503,12 +557,12 @@ class UnifiedParser:
             if not part:
                 continue
 
-            # Extract number (handles special notation like 1sp, 2dp)
-            # For now, just extract the leading digits
+            # Extract number string (handles special notation like 1sp, 2dp)
+            # Keep as string to preserve leading zeros
             match = re.match(r'(\d+)', part)
             if match:
-                num = int(match.group(1))
-                numbers.append(num)
+                num_str = match.group(1)
+                numbers.append(num_str)
 
         return numbers
 
@@ -548,33 +602,47 @@ class UnifiedParser:
 
         raise ValueError(f"No numeric value found in: {text}")
 
-    def _classify_by_length(self, number: int) -> str:
+    def _classify_by_length(self, num_str: str) -> tuple[str, int]:
         """
-        Classify entry type based on number length/range.
+        Classify entry type based on number string length (preserves leading zeros).
 
         Rules:
-        - 0-9: time table (single digit)
-        - 10-99: jodi (two digits)
-        - 100-999: pana (three digits)
+        - 1 digit string: time table (e.g., "5" → time)
+        - 2 digit string: jodi (e.g., "05", "12" → jodi)
+        - 3 digit string: pana (e.g., "100", "005" → pana)
 
         Args:
-            number: Number to classify
+            num_str: Number as string (preserves leading zeros)
 
         Returns:
-            Entry type: 'time', 'jodi', or 'pana'
+            Tuple of (entry_type, numeric_value)
+            - entry_type: 'time', 'jodi', or 'pana'
+            - numeric_value: Integer value of the number
 
         Raises:
-            ValueError: If number is out of valid range
+            ValueError: If number string length is invalid
         """
-        if 0 <= number <= 9:
-            return 'time'
-        elif 10 <= number <= 99:
-            return 'jodi'
-        elif 100 <= number <= 999:
-            return 'pana'
+        length = len(num_str)
+        num_value = int(num_str)
+
+        if length == 1:
+            # Single digit: time table (0-9)
+            if not (0 <= num_value <= 9):
+                raise ValueError(f"Invalid time number: {num_str} (must be 0-9)")
+            return 'time', num_value
+        elif length == 2:
+            # Two digits: jodi (00-99)
+            if not (0 <= num_value <= 99):
+                raise ValueError(f"Invalid jodi number: {num_str} (must be 00-99)")
+            return 'jodi', num_value
+        elif length == 3:
+            # Three digits: pana (000-999)
+            if not (0 <= num_value <= 999):
+                raise ValueError(f"Invalid pana number: {num_str} (must be 000-999)")
+            return 'pana', num_value
         else:
             raise ValueError(
-                f"Number {number} out of valid range (0-9: time, 10-99: jodi, 100-999: pana)"
+                f"Invalid number length: {num_str} (must be 1, 2, or 3 digits)"
             )
 
     def parse_with_type_hint(self, text: str, expected_type: Optional[str] = None) -> Dict:

@@ -113,8 +113,9 @@ def create_working_main_gui():
                     try:
                         table_loader = TypeTableLoader(db_manager)
                         sp_table, dp_table, cp_table = table_loader.load_all_tables()
-                        calc_engine = CalculationEngine(sp_table, dp_table, cp_table)
-                        print(f"✅ Type tables loaded: SP({len(sp_table)}), DP({len(dp_table)}), CP({len(cp_table)})")
+                        family_pana_table = table_loader.load_family_pana_table()
+                        calc_engine = CalculationEngine(sp_table, dp_table, cp_table, family_pana_table)
+                        print(f"✅ Tables loaded: SP({len(sp_table)}), DP({len(dp_table)}), CP({len(cp_table)}), Family({len(family_pana_table)})")
                     except Exception as e:
                         print(f"⚠️ Failed to load type tables: {e}")
                         calc_engine = CalculationEngine()
@@ -127,12 +128,13 @@ def create_working_main_gui():
                 if not parsed_result.is_empty:
                     # Calculate totals
                     calc_result = calc_engine.calculate_total(parsed_result)
-                    total_entries = (len(parsed_result.pana_entries or []) + 
-                                   len(parsed_result.type_entries or []) + 
-                                   len(parsed_result.time_entries or []) + 
+                    total_entries = (len(parsed_result.pana_entries or []) +
+                                   len(parsed_result.type_entries or []) +
+                                   len(parsed_result.time_entries or []) +
                                    len(parsed_result.multi_entries or []) +
                                    len(parsed_result.direct_entries or []) +
-                                   len(getattr(parsed_result, 'jodi_entries', []) or []))
+                                   len(getattr(parsed_result, 'jodi_entries', []) or []) +
+                                   len(getattr(parsed_result, 'family_pana_entries', []) or []))
                     
                     # Update validation status
                     dpg.set_value("validation_status", f"✓ {total_entries} entries detected")
@@ -263,7 +265,30 @@ def create_working_main_gui():
                         if hasattr(calc_result, 'multi_total') and calc_result.multi_total > 0:
                             preview_lines.append(f"   → Subtotal: ₹{calc_result.multi_total:,}")
                         preview_lines.append("")
-                    
+
+                    # Check for family pana entries
+                    if hasattr(parsed_result, 'family_pana_entries') and parsed_result.family_pana_entries:
+                        preview_lines.append(f"[FAMILY PANA] Family Expansions ({len(parsed_result.family_pana_entries)}):")
+                        for entry in parsed_result.family_pana_entries:
+                            # Show reference number and value
+                            preview_lines.append(f"   {entry.reference_number}family = ₹{entry.value:,}")
+                            # Try to show how many numbers will be expanded
+                            if calc_engine and calc_engine.family_pana_table:
+                                family_numbers = calc_engine.family_pana_table.get(entry.reference_number, [])
+                                if family_numbers:
+                                    count = len(family_numbers)
+                                    total = count * entry.value
+                                    preview_lines.append(f"   → Expands to {count} pana numbers × ₹{entry.value:,} = ₹{total:,}")
+                                    # Show some of the numbers
+                                    if count <= 8:
+                                        nums_str = ", ".join(map(str, family_numbers))
+                                    else:
+                                        nums_str = ", ".join(map(str, family_numbers[:8])) + f"... (+{count-8})"
+                                    preview_lines.append(f"   → Numbers: {nums_str}")
+                                else:
+                                    preview_lines.append(f"   ⚠️ No family data found for {entry.reference_number}")
+                        preview_lines.append("")
+
                     # Add grand total summary
                     preview_lines.append("=" * 40)
                     preview_lines.append(f"GRAND TOTAL: ₹{total_value:,}")
@@ -349,8 +374,9 @@ def create_working_main_gui():
                         try:
                             table_loader = TypeTableLoader(db_manager)
                             sp_table, dp_table, cp_table = table_loader.load_all_tables()
-                            calc_engine = CalculationEngine(sp_table, dp_table, cp_table)
-                            print(f"✅ Type tables loaded for calculation: SP({len(sp_table)}), DP({len(dp_table)}), CP({len(cp_table)})")
+                            family_pana_table = table_loader.load_family_pana_table()
+                            calc_engine = CalculationEngine(sp_table, dp_table, cp_table, family_pana_table)
+                            print(f"✅ Tables loaded for calculation: SP({len(sp_table)}), DP({len(dp_table)}), CP({len(cp_table)}), Family({len(family_pana_table)})")
                         except Exception as e:
                             print(f"⚠️ Failed to load type tables for calculation: {e}")
                             calc_engine = CalculationEngine()

@@ -252,13 +252,25 @@ class JodiEntry:
     """Jodi number assignment entry"""
     jodi_numbers: List[int]
     value: int
-    
+
     def __post_init__(self):
         if not self.jodi_numbers:
             raise ValueError("Jodi numbers list cannot be empty")
         for jodi_number in self.jodi_numbers:
             if not (0 <= jodi_number <= 99):
                 raise ValueError(f"Invalid jodi number: {jodi_number}")
+        if self.value <= 0:
+            raise ValueError(f"Invalid value: {self.value}")
+
+@dataclass
+class FamilyPanaEntry:
+    """Family pana entry - expands to multiple pana numbers from family table"""
+    reference_number: int  # The pana number to lookup in family table (e.g., 678)
+    value: int
+
+    def __post_init__(self):
+        if not (100 <= self.reference_number <= 999):
+            raise ValueError(f"Invalid family pana reference: {self.reference_number}. Must be 100-999")
         if self.value <= 0:
             raise ValueError(f"Invalid value: {self.value}")
 
@@ -271,18 +283,21 @@ class ParsedInputResult:
     multi_entries: List[MultiEntry] = field(default_factory=list)
     direct_entries: List[DirectNumberEntry] = field(default_factory=list)
     jodi_entries: List[JodiEntry] = field(default_factory=list)
-    
+    family_pana_entries: List[FamilyPanaEntry] = field(default_factory=list)
+
     @property
     def is_empty(self) -> bool:
         """Check if no entries were parsed"""
-        return not (self.pana_entries or self.type_entries or 
-                   self.time_entries or self.multi_entries or self.direct_entries or self.jodi_entries)
-    
+        return not (self.pana_entries or self.type_entries or
+                   self.time_entries or self.multi_entries or self.direct_entries or
+                   self.jodi_entries or self.family_pana_entries)
+
     @property
     def total_entries(self) -> int:
         """Get total number of parsed entries"""
-        return (len(self.pana_entries) + len(self.type_entries) + 
-                len(self.time_entries) + len(self.multi_entries) + len(self.direct_entries) + len(self.jodi_entries))
+        return (len(self.pana_entries) + len(self.type_entries) +
+                len(self.time_entries) + len(self.multi_entries) + len(self.direct_entries) +
+                len(self.jodi_entries) + len(self.family_pana_entries))
 
 @dataclass
 class CalculationResult:
