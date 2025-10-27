@@ -51,7 +51,8 @@ class CalculationEngine:
 
     def __init__(self, sp_table: Dict[int, Set[int]] = None,
                  dp_table: Dict[int, Set[int]] = None,
-                 cp_table: Dict[int, Set[int]] = None):
+                 cp_table: Dict[int, Set[int]] = None,
+                 family_pana_table: Dict[int, List[int]] = None):
         """
         Initialize calculation engine with type table references
 
@@ -59,10 +60,12 @@ class CalculationEngine:
             sp_table: SP table mapping {column: {valid_numbers}}
             dp_table: DP table mapping {column: {valid_numbers}}
             cp_table: CP table mapping {column: {valid_numbers}}
+            family_pana_table: Family pana table mapping {reference_number: [pana_numbers]}
         """
         self.sp_table = sp_table or {}
         self.dp_table = dp_table or {}
         self.cp_table = cp_table or {}
+        self.family_pana_table = family_pana_table or {}
         self.logger = get_logger(__name__)
 
     @staticmethod
@@ -90,7 +93,7 @@ class CalculationEngine:
         Returns: CalculationResult with breakdown by type
         """
         result = CalculationResult()
-        
+
         # Calculate each type separately
         result.pana_total = self.calculate_pana_total(parsed_entries.pana_entries or [])
         result.type_total = self.calculate_type_total(parsed_entries.type_entries or [])
@@ -98,17 +101,26 @@ class CalculationEngine:
         result.multi_total = self.calculate_multi_total(parsed_entries.multi_entries or [])
         result.direct_total = self.calculate_direct_total(getattr(parsed_entries, 'direct_entries', []) or [])
         result.jodi_total = self.calculate_jodi_total(getattr(parsed_entries, 'jodi_entries', []) or [])
-        
+
+        # Calculate family pana total (expands to multiple pana entries)
+        family_pana_entries = getattr(parsed_entries, 'family_pana_entries', []) or []
+        if family_pana_entries:
+            family_pana_total = 0
+            for entry in family_pana_entries:
+                family_numbers = self.family_pana_table.get(entry.reference_number, [])
+                family_pana_total += len(family_numbers) * entry.value
+            result.pana_total += family_pana_total
+
         # Calculate grand total
         result.grand_total = (
-            result.pana_total + 
-            result.type_total + 
-            result.time_total + 
-            result.multi_total + 
-            result.direct_total + 
+            result.pana_total +
+            result.type_total +
+            result.time_total +
+            result.multi_total +
+            result.direct_total +
             result.jodi_total
         )
-        
+
         return result
     
     def calculate(self, context: CalculationContext) -> BusinessCalculation:
@@ -172,10 +184,18 @@ class CalculationEngine:
                 calculation.universal_entries.extend(jodi_calc['universal_entries'])
             else:
                 calculation.jodi_total = 0
-            
+
+            # Add support for family pana entries (expands to multiple pana entries)
+            if hasattr(result, 'family_pana_entries') and result.family_pana_entries:
+                family_calc = self._calculate_family_pana_entries(context, result.family_pana_entries)
+                # Family pana contributes to pana_total
+                calculation.pana_total += family_calc['total']
+                calculation.breakdown['family_pana'] = family_calc
+                calculation.universal_entries.extend(family_calc['universal_entries'])
+
             # Calculate totals
-            calculation.bazar_total = (calculation.pana_total + calculation.type_total + 
-                                    calculation.time_total + calculation.multi_total + 
+            calculation.bazar_total = (calculation.pana_total + calculation.type_total +
+                                    calculation.time_total + calculation.multi_total +
                                     calculation.direct_total + calculation.jodi_total)
             calculation.grand_total = calculation.bazar_total
             
@@ -463,18 +483,18 @@ class CalculationEngine:
         }
     
     def _calculate_jodi_entries(self, context: CalculationContext, entries) -> Dict[str, Any]:
-        """Calculate jodi entries - each jodi number gets the full value and populate time table based on digit frequencies"""
+        """Calculate jodi entries - each jodi number gets the full value"""
         total = 0
         universal_entries = []
         entry_details = []
-        
+
         for entry in entries:
             # Each jodi number gets the full value
             # Total calculation: number_of_jodi_numbers × value
             entry_total = len(entry.jodi_numbers) * entry.value
             total += entry_total
-            
-            # Create universal entry for each jodi number (for jodi table)
+
+            # Create universal entry for each jodi number (for jodi table only)
             for jodi_number in entry.jodi_numbers:
                 jodi_universal_entry = UniversalLogEntry(
                     customer_id=context.customer_id,
@@ -487,38 +507,13 @@ class CalculationEngine:
                     source_line=f"{'-'.join(map(str, entry.jodi_numbers))}={entry.value}"
                 )
                 universal_entries.append(jodi_universal_entry)
-            
-            # Calculate digit frequency for time table population
-            digit_frequency = {}
-            for jodi_number in entry.jodi_numbers:
-                # Extract units digit (column number for time table)
-                units_digit = jodi_number % 10
-                if units_digit not in digit_frequency:
-                    digit_frequency[units_digit] = 0
-                digit_frequency[units_digit] += 1
-            
-            # Create TIME_MULTI universal entries based on digit frequency
-            for digit, frequency in digit_frequency.items():
-                time_value = entry.value * frequency  # value × frequency
-                time_universal_entry = UniversalLogEntry(
-                    customer_id=context.customer_id,
-                    customer_name=context.customer_name,
-                    entry_date=context.entry_date,
-                    bazar=context.bazar,
-                    number=digit,  # Column number (0-9)
-                    value=time_value,  # value × frequency
-                    entry_type=EntryType.TIME_MULTI,
-                    source_line=f"{'-'.join(map(str, entry.jodi_numbers))}={entry.value} (digit_{digit}×{frequency})"
-                )
-                universal_entries.append(time_universal_entry)
-            
+
             entry_details.append({
                 'jodi_numbers': entry.jodi_numbers,
                 'input_value': entry.value,
                 'count': len(entry.jodi_numbers),
                 'total_value': entry_total,
                 'value_per_jodi': entry.value,  # Full value per jodi number
-                'digit_frequency': digit_frequency,  # Added digit frequency info
                 'calculation': f"{entry.value} × {len(entry.jodi_numbers)} = {entry_total} (each jodi gets full {entry.value})"
             })
         
@@ -529,7 +524,68 @@ class CalculationEngine:
             'details': entry_details,
             'calculation_method': 'jodi_assignment'
         }
-    
+
+    def _calculate_family_pana_entries(self, context: CalculationContext, entries) -> Dict[str, Any]:
+        """
+        Calculate family pana entries by expanding to multiple pana numbers from family table.
+
+        For input like "678family=200":
+        - Lookup 678 in family_pana_table
+        - Get all pana numbers in that family (e.g., [678, 579, 234, 124, 589, 670, 125, 680])
+        - Apply value 200 to each pana number
+        - Total: number_of_pana_numbers × value
+        """
+        total = 0
+        universal_entries = []
+        entry_details = []
+
+        for entry in entries:
+            # Get pana numbers from family table
+            family_numbers = self.family_pana_table.get(entry.reference_number, [])
+
+            if not family_numbers:
+                self.logger.warning(
+                    f"No family pana numbers found for reference {entry.reference_number}. "
+                    f"Skipping this entry."
+                )
+                continue
+
+            # Calculate total for this family entry
+            entry_total = len(family_numbers) * entry.value
+            total += entry_total
+
+            # Create universal log entry for each pana number in the family
+            for pana_number in family_numbers:
+                universal_entry = UniversalLogEntry(
+                    customer_id=context.customer_id,
+                    customer_name=context.customer_name,
+                    entry_date=context.entry_date,
+                    bazar=context.bazar,
+                    number=pana_number,
+                    value=entry.value,  # Each pana gets the full value
+                    entry_type=EntryType.PANA,
+                    source_line=f"{entry.reference_number}family={entry.value}"
+                )
+                universal_entries.append(universal_entry)
+
+            entry_details.append({
+                'reference_number': entry.reference_number,
+                'family_numbers': family_numbers,
+                'input_value': entry.value,
+                'count': len(family_numbers),
+                'total_value': entry_total,
+                'value_per_pana': entry.value,  # Full value per pana number
+                'calculation': f"{entry.value} × {len(family_numbers)} = {entry_total} (each pana gets full {entry.value})"
+            })
+
+        return {
+            'total': total,
+            'entry_count': len(entries),
+            'universal_entries': universal_entries,
+            'details': entry_details,
+            'calculation_method': 'family_pana_expansion'
+        }
+
     def calculate_pana_total(self, entries: List[PanaEntry]) -> int:
         """Calculate pana total following specification rules"""
         if not entries:

@@ -4,10 +4,10 @@ Converts simplified parser output to ParsedInputResult format
 """
 
 from typing import Dict, List
-from .unified_parser import UnifiedParser, ParsedEntry, TypeTableEntry
+from .unified_parser import UnifiedParser, ParsedEntry, TypeTableEntry, FamilyPanaEntry as UnifiedFamilyPanaEntry
 from ..database.models import (
     ParsedInputResult, PanaEntry, TimeEntry, JodiEntry,
-    DirectNumberEntry, TypeEntry, MultiEntry
+    DirectNumberEntry, TypeEntry, MultiEntry, FamilyPanaEntry
 )
 
 
@@ -76,6 +76,14 @@ class ParserAdapter:
                 numbers=[]  # Numbers will be expanded by CalculationEngine
             )
             parsed_result.type_entries.append(type_entry)
+
+        # Convert family pana entries (678family → FamilyPanaEntry)
+        for entry in result['family_pana_entries']:
+            family_entry = FamilyPanaEntry(
+                reference_number=entry.reference_number,
+                value=entry.value
+            )
+            parsed_result.family_pana_entries.append(family_entry)
 
         return parsed_result
 
@@ -199,3 +207,19 @@ class TypeTableLoader:
     def load_table(self, table_type: str):
         """Load single table by type (for backward compatibility)"""
         return self._load_table(table_type.lower())
+
+    def load_family_pana_table(self):
+        """
+        Load family pana table.
+
+        Returns:
+            Dict[int, List[int]] - {reference_number: [pana_numbers]}
+        """
+        try:
+            # Import the actual family pana table data
+            from ..data.family_pana_table import FAMILY_LOOKUP
+            return FAMILY_LOOKUP
+        except ImportError:
+            print("⚠️ Warning: Failed to import family_pana_table module")
+            # Fallback to empty dict
+            return {}
