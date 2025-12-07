@@ -1,0 +1,23 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Build folders
+/build/
+app/build/
+.gradle/
+
+# Local configuration file
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+.DS_Store
+
+# Kotlin
+*.kotlin_module
+
+# Log files
+*.log

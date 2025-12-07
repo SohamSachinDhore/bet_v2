@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RickyMama Notifier</string>
+    <string name="notification_channel_name">RickyMama Notifier Service</string>
+    <string name="notification_channel_description">Notification listener service for RickyMama</string>
+    <string name="service_notification_title">RickyMama Notifier</string>
+    <string name="service_notification_text">Listening for WhatsApp messages...</string>
+</resources>
