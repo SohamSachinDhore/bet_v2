@@ -3,7 +3,9 @@ package com.rickymama.notifier
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -22,19 +24,69 @@ class NotificationService : NotificationListenerService() {
         private const val WHATSAPP_BUSINESS_PACKAGE = "com.whatsapp.w4b"
         private const val CHANNEL_ID = "rickymama_notifier_channel"
         private const val NOTIFICATION_ID = 1001
-
-        @Volatile
-        private var isActive = false
+        private const val PREF_SERVICE_ACTIVE = "service_active"
+        private const val PREF_DEBUG_INFO = "debug_info"
+        private const val PREF_NOTIF_COUNT = "notification_count"
+        private const val PREF_LAST_PACKAGE = "last_package"
 
         @Volatile
         private var instance: NotificationService? = null
 
-        fun setActive(active: Boolean) {
-            isActive = active
-            Log.d(TAG, "Service active state: $active")
+        private fun getPrefs(context: android.content.Context) =
+            context.getSharedPreferences("rickymama_service", android.content.Context.MODE_PRIVATE)
+
+        fun setActive(context: android.content.Context, active: Boolean) {
+            getPrefs(context).edit().putBoolean(PREF_SERVICE_ACTIVE, active).apply()
+            Log.d(TAG, "Service active state saved: $active")
         }
 
-        fun isServiceActive(): Boolean = isActive
+        fun isServiceActive(context: android.content.Context): Boolean {
+            return getPrefs(context).getBoolean(PREF_SERVICE_ACTIVE, false)
+        }
+
+        fun saveDebugInfo(context: android.content.Context, info: String) {
+            val count = getPrefs(context).getInt(PREF_NOTIF_COUNT, 0) + 1
+            getPrefs(context).edit()
+                .putString(PREF_DEBUG_INFO, info)
+                .putInt(PREF_NOTIF_COUNT, count)
+                .apply()
+        }
+
+        fun saveLastPackage(context: android.content.Context, pkg: String) {
+            getPrefs(context).edit().putString(PREF_LAST_PACKAGE, pkg).apply()
+        }
+
+        fun getDebugInfo(context: android.content.Context): String {
+            return getPrefs(context).getString(PREF_DEBUG_INFO, "No notifications yet") ?: "No notifications yet"
+        }
+
+        fun getNotificationCount(context: android.content.Context): Int {
+            return getPrefs(context).getInt(PREF_NOTIF_COUNT, 0)
+        }
+
+        fun getLastPackage(context: android.content.Context): String {
+            return getPrefs(context).getString(PREF_LAST_PACKAGE, "None") ?: "None"
+        }
+
+        fun clearDebugInfo(context: android.content.Context) {
+            getPrefs(context).edit()
+                .putInt(PREF_NOTIF_COUNT, 0)
+                .putString(PREF_DEBUG_INFO, "Cleared")
+                .putString(PREF_LAST_PACKAGE, "None")
+                .apply()
+        }
+
+        // Keep old method for compatibility
+        @Deprecated("Use setActive(context, active) instead")
+        fun setActive(active: Boolean) {
+            instance?.let {
+                setActive(it.applicationContext, active)
+            } ?: Log.w(TAG, "No instance available, cannot set active state")
+        }
+
+        fun isServiceActive(): Boolean {
+            return instance?.let { isServiceActive(it.applicationContext) } ?: false
+        }
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -57,31 +109,53 @@ class NotificationService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         Log.d(TAG, "NotificationListener connected")
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val notification = createForegroundNotification()
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        saveDebugInfo(applicationContext, "Listener CONNECTED at ${System.currentTimeMillis()}")
+        // Note: Do NOT call startForeground() - system manages NotificationListenerService
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         Log.d(TAG, "NotificationListener disconnected")
+        saveDebugInfo(applicationContext, "Listener DISCONNECTED at ${System.currentTimeMillis()}")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        if (sbn == null || !isActive) return
+        Log.d(TAG, ">>> onNotificationPosted called")
 
-        val packageName = sbn.packageName
-
-        if (packageName != WHATSAPP_PACKAGE && packageName != WHATSAPP_BUSINESS_PACKAGE) {
+        if (sbn == null) {
+            Log.d(TAG, "Notification is null, ignoring")
             return
         }
+
+        // Always log the package for debugging
+        val packageName = sbn.packageName
+        saveLastPackage(applicationContext, packageName)
+        Log.d(TAG, "Received notification from: $packageName")
+
+        val isActive = isServiceActive(applicationContext)
+        Log.d(TAG, "Package: $packageName, isActive: $isActive")
+
+        // Save debug info for ALL notifications
+        saveDebugInfo(applicationContext, "Got notif from: $packageName (active=$isActive)")
+
+        if (!isActive) {
+            Log.d(TAG, "Service not active, ignoring notification")
+            return
+        }
+
+        if (packageName != WHATSAPP_PACKAGE && packageName != WHATSAPP_BUSINESS_PACKAGE) {
+            Log.d(TAG, "Not a WhatsApp notification, ignoring: $packageName")
+            return
+        }
+
+        Log.d(TAG, "Processing WhatsApp notification...")
+        saveDebugInfo(applicationContext, "Processing WhatsApp from: $packageName")
 
         try {
             processWhatsAppNotification(sbn)
         } catch (e: Exception) {
             Log.e(TAG, "Error processing notification", e)
+            saveDebugInfo(applicationContext, "ERROR: ${e.message}")
         }
     }
 

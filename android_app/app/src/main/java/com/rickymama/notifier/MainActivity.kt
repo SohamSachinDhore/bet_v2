@@ -48,12 +48,13 @@ fun MainScreen(settingsManager: SettingsManager) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // State
+    // State - restore saved service state
+    val savedServiceState = NotificationService.isServiceActive(context)
     var serverHost by remember { mutableStateOf(settingsManager.getServerHost()) }
     var serverPort by remember { mutableStateOf(settingsManager.getServerPort().toString()) }
     var allowedGroups by remember { mutableStateOf(settingsManager.getAllowedGroups()) }
-    var isServiceRunning by remember { mutableStateOf(false) }
-    var connectionStatus by remember { mutableStateOf("Not connected") }
+    var isServiceRunning by remember { mutableStateOf(savedServiceState) }
+    var connectionStatus by remember { mutableStateOf(if (savedServiceState) "Service active - listening" else "Not connected") }
     var lastMessageTime by remember { mutableStateOf("Never") }
     var messageCount by remember { mutableStateOf(0) }
 
@@ -226,13 +227,13 @@ fun MainScreen(settingsManager: SettingsManager) {
                                 }
 
                                 isServiceRunning = enabled
-                                if (enabled) {
-                                    NotificationService.setActive(true)
-                                    connectionStatus = "Service active"
-                                } else {
-                                    NotificationService.setActive(false)
-                                    connectionStatus = "Service inactive"
-                                }
+                                NotificationService.setActive(context, enabled)
+                                connectionStatus = if (enabled) "Service active - listening" else "Service inactive"
+                                Toast.makeText(
+                                    context,
+                                    if (enabled) "Service enabled - listening for WhatsApp" else "Service disabled",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         )
                     }
@@ -268,6 +269,55 @@ fun MainScreen(settingsManager: SettingsManager) {
                 }
             }
 
+            // Debug Card - Shows notification listener status
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF2196F3).copy(alpha = 0.1f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Debug Info", style = MaterialTheme.typography.titleMedium)
+
+                    var debugInfo by remember { mutableStateOf(NotificationService.getDebugInfo(context)) }
+                    var notifCount by remember { mutableStateOf(NotificationService.getNotificationCount(context)) }
+                    var lastPackage by remember { mutableStateOf(NotificationService.getLastPackage(context)) }
+
+                    Text("Notifications received: $notifCount", style = MaterialTheme.typography.bodySmall)
+                    Text("Last package: $lastPackage", style = MaterialTheme.typography.bodySmall)
+                    Text("Last event: $debugInfo", style = MaterialTheme.typography.bodySmall)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                debugInfo = NotificationService.getDebugInfo(context)
+                                notifCount = NotificationService.getNotificationCount(context)
+                                lastPackage = NotificationService.getLastPackage(context)
+                            }
+                        ) {
+                            Text("Refresh")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                NotificationService.clearDebugInfo(context)
+                                debugInfo = "Cleared"
+                                notifCount = 0
+                                lastPackage = "None"
+                            }
+                        ) {
+                            Text("Clear")
+                        }
+                    }
+                }
+            }
+
             // Instructions Card
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
@@ -281,6 +331,11 @@ fun MainScreen(settingsManager: SettingsManager) {
                     Text("4. Optionally filter specific WhatsApp groups", style = MaterialTheme.typography.bodySmall)
                     Text("5. Save settings and enable the service", style = MaterialTheme.typography.bodySmall)
                     Text("6. WhatsApp messages will appear in the desktop app", style = MaterialTheme.typography.bodySmall)
+                    Text("", style = MaterialTheme.typography.bodySmall)
+                    Text("Troubleshooting:", style = MaterialTheme.typography.titleSmall)
+                    Text("• Disable battery optimization for this app", style = MaterialTheme.typography.bodySmall)
+                    Text("• Toggle Notification Access OFF and ON", style = MaterialTheme.typography.bodySmall)
+                    Text("• Reboot phone if notifications not captured", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

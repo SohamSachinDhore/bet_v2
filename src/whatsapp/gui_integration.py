@@ -85,9 +85,14 @@ class WhatsAppGUIPanel:
     def create_panel(self, parent_window: str = None):
         """Create the WhatsApp panel UI"""
 
-        # Main WhatsApp panel window
+        # Delete existing panel to recreate with latest UI
+        if dpg.does_item_exist("whatsapp_panel"):
+            dpg.delete_item("whatsapp_panel")
+            print("[WHATSAPP] Deleted old panel, recreating with new UI...")
+
+        # Main WhatsApp panel window - larger for better visibility
         with dpg.window(label="WhatsApp Integration", tag="whatsapp_panel",
-                        width=500, height=600, show=False, pos=[50, 50]):
+                        width=700, height=800, show=True, pos=[50, 50]):
 
             # Header with server status
             with dpg.group(horizontal=True):
@@ -144,11 +149,9 @@ class WhatsAppGUIPanel:
             # Action buttons for entries list
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Refresh", callback=self._refresh_entries_list)
-                dpg.add_button(label="Approve Selected", tag="approve_btn",
-                               callback=self._approve_selected, enabled=False)
-                dpg.add_button(label="Reject Selected", tag="reject_btn",
+                dpg.add_button(label="Reject", tag="reject_btn",
                                callback=self._reject_selected, enabled=False)
-                dpg.add_button(label="Delete Selected", tag="delete_btn",
+                dpg.add_button(label="Delete", tag="delete_btn",
                                callback=self._delete_selected, enabled=False)
 
             dpg.add_separator()
@@ -156,7 +159,7 @@ class WhatsAppGUIPanel:
             # Entry detail/edit section
             dpg.add_text("Entry Details", color=(100, 200, 255))
 
-            with dpg.child_window(tag="entry_detail_container", height=200, border=True):
+            with dpg.child_window(tag="entry_detail_container", height=280, border=True):
                 dpg.add_text("Select an entry to view details", tag="entry_detail_placeholder")
 
                 # Hidden detail fields (shown when entry selected)
@@ -183,9 +186,19 @@ class WhatsAppGUIPanel:
                     dpg.add_spacer(height=5)
                     with dpg.group(horizontal=True):
                         dpg.add_combo(label="Customer", tag="detail_customer_combo",
-                                      items=[], width=150)
+                                      items=[], width=200,
+                                      callback=self._on_customer_combo_change)
                         dpg.add_combo(label="Bazar", tag="detail_bazar_combo",
                                       items=[], width=150)
+
+                    # Customer registration warning and button (shown only for unregistered)
+                    with dpg.group(tag="register_customer_group", show=False):
+                        dpg.add_spacer(height=3)
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("⚠️ Customer not registered!",
+                                        tag="customer_warning_text", color=(255, 200, 100))
+                            dpg.add_button(label="Register Customer", tag="register_customer_btn",
+                                          callback=self._register_customer_callback)
 
                     dpg.add_spacer(height=5)
                     with dpg.group(horizontal=True):
@@ -195,14 +208,23 @@ class WhatsAppGUIPanel:
                         dpg.add_text("Entries: ", color=(150, 150, 150))
                         dpg.add_text("0", tag="detail_entry_count")
 
-            dpg.add_spacer(height=5)
+            dpg.add_spacer(height=10)
 
-            # Quick approve with current settings
+            # Main action buttons - APPROVE & INSERT is the primary action
+            dpg.add_text("Actions:", color=(100, 200, 255))
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Save Changes", tag="save_changes_btn",
-                               callback=self._save_entry_changes, enabled=False)
-                dpg.add_button(label="Approve & Insert", tag="approve_insert_btn",
+                dpg.add_button(label=">>> APPROVE & INSERT TO DATABASE <<<", tag="approve_insert_btn",
                                callback=self._approve_and_insert, enabled=False)
+            dpg.add_spacer(height=5)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Save Changes Only", tag="save_changes_btn",
+                               callback=self._save_entry_changes, enabled=False)
+                dpg.add_button(label="Skip (Mark Done)", tag="approve_btn",
+                               callback=self._approve_selected, enabled=False)
+
+        # Initialize combos with data
+        self._update_combos()
+        self.is_panel_visible = True
 
         # Create toggle button for main toolbar
         return "whatsapp_panel"
@@ -310,8 +332,10 @@ class WhatsAppGUIPanel:
 
         # Update badge
         count = len(self.pending_entries)
-        dpg.set_value("whatsapp_badge", str(count))
-        dpg.set_value("whatsapp_pending_count", f"Pending: {count}")
+        if dpg.does_item_exist("whatsapp_badge"):
+            dpg.set_value("whatsapp_badge", str(count))
+        if dpg.does_item_exist("whatsapp_pending_count"):
+            dpg.set_value("whatsapp_pending_count", f"Pending: {count}")
 
         # Clear existing entries
         if dpg.does_item_exist("entries_table"):
@@ -378,11 +402,76 @@ class WhatsAppGUIPanel:
         dpg.set_value("detail_total_value", f"{entry.total_value:,}")
         dpg.set_value("detail_entry_count", str(entry.entry_count))
 
-        # Set combo values
-        if entry.customer_name:
-            dpg.set_value("detail_customer_combo", entry.customer_name)
+        # Set combo values - use sender_name as customer if not set
+        customer_to_use = entry.customer_name if entry.customer_name else entry.sender_name
+        if customer_to_use:
+            # Add sender_name to combo items if not already present
+            current_items = dpg.get_item_configuration("detail_customer_combo").get("items", [])
+            if customer_to_use not in current_items:
+                current_items = [customer_to_use] + list(current_items)
+                dpg.configure_item("detail_customer_combo", items=current_items)
+            dpg.set_value("detail_customer_combo", customer_to_use)
+
+        # Set bazar - use entry's bazar, default_bazar, or first available
         if entry.bazar:
             dpg.set_value("detail_bazar_combo", entry.bazar)
+        elif self.default_bazar:
+            dpg.set_value("detail_bazar_combo", self.default_bazar)
+        else:
+            # Get first bazar from the combo items
+            bazar_items = dpg.get_item_configuration("detail_bazar_combo").get("items", [])
+            if bazar_items:
+                dpg.set_value("detail_bazar_combo", bazar_items[0])
+                self.default_bazar = bazar_items[0]
+
+        # Check if customer is registered and show/hide register button
+        self._update_customer_registration_status(customer_to_use)
+
+    def _on_customer_combo_change(self, sender, app_data, user_data):
+        """Handle customer combo value change"""
+        customer_name = dpg.get_value("detail_customer_combo")
+        self._update_customer_registration_status(customer_name)
+
+    def _update_customer_registration_status(self, customer_name: str):
+        """Check if customer is registered and update UI accordingly"""
+        is_registered = False
+
+        if self.db_manager and customer_name:
+            try:
+                customer = self.db_manager.get_customer_by_name(customer_name)
+                is_registered = customer is not None
+            except Exception:
+                is_registered = False
+
+        # Show/hide the registration warning
+        if dpg.does_item_exist("register_customer_group"):
+            dpg.configure_item("register_customer_group", show=not is_registered)
+
+    def _register_customer_callback(self):
+        """Register new customer from WhatsApp sender"""
+        if not self.db_manager:
+            print("Database manager not available")
+            return
+
+        # Get customer name from combo
+        customer_name = dpg.get_value("detail_customer_combo")
+        if not customer_name:
+            print("No customer name to register")
+            return
+
+        try:
+            # Add new customer
+            new_id = self.db_manager.add_customer(customer_name)
+            print(f"✅ Registered new customer: {customer_name} (ID: {new_id})")
+
+            # Refresh customer list in combos
+            self._update_combos()
+
+            # Hide the registration warning
+            dpg.configure_item("register_customer_group", show=False)
+
+        except Exception as e:
+            print(f"Failed to register customer: {e}")
 
     def _clear_selection(self):
         """Clear entry selection"""
@@ -395,6 +484,10 @@ class WhatsAppGUIPanel:
 
         dpg.configure_item("entry_detail_placeholder", show=True)
         dpg.configure_item("entry_detail_group", show=False)
+
+        # Hide register customer group
+        if dpg.does_item_exist("register_customer_group"):
+            dpg.configure_item("register_customer_group", show=False)
 
     def _approve_selected(self):
         """Approve selected entry without inserting"""
@@ -437,30 +530,45 @@ class WhatsAppGUIPanel:
 
     def _approve_and_insert(self):
         """Approve entry and insert into main database"""
+        print(f"\n{'='*50}")
+        print(f"[APPROVE] _approve_and_insert called")
+        print(f"[APPROVE] selected_entry_id={self.selected_entry_id}")
+        print(f"[APPROVE] on_approve_callback={self.on_approve_callback}")
+        print(f"{'='*50}")
+
         if not self.selected_entry_id:
+            print("[APPROVE] ERROR: No entry selected")
             return
 
         entry = self.server.get_entry_by_id(self.selected_entry_id)
         if not entry:
+            print("[APPROVE] ERROR: Entry not found in server")
             return
+
+        print(f"[APPROVE] Entry found: sender={entry.sender_name}, msg={entry.raw_message[:50]}")
 
         # Get current values from UI
         customer_name = dpg.get_value("detail_customer_combo")
         bazar = dpg.get_value("detail_bazar_combo")
         edited_content = dpg.get_value("detail_edited_content")
 
+        print(f"[APPROVE] From UI - Customer: '{customer_name}', Bazar: '{bazar}'")
+        print(f"[APPROVE] Raw message: {entry.raw_message}")
+        print(f"[APPROVE] Edited content: '{edited_content}'")
+
         # Use edited content if provided, otherwise use original
         content_to_process = edited_content.strip() if edited_content.strip() else entry.raw_message
-
-        # Call the approval callback with the data
+        print(f"[APPROVE] Content to process: {content_to_process}")
         if self.on_approve_callback:
             try:
+                print("[DEBUG] Calling on_approve_callback...")
                 result = self.on_approve_callback(
                     content=content_to_process,
                     customer_name=customer_name,
                     bazar=bazar,
                     source_entry=entry
                 )
+                print(f"[DEBUG] Callback result: {result}")
 
                 if result.get('success', False):
                     # Mark as approved and remove from queue
@@ -469,14 +577,19 @@ class WhatsAppGUIPanel:
                     self._clear_selection()
 
                     # Show success message
-                    print(f"Approved and inserted: {result.get('entries_count', 0)} entries, Total: {result.get('total_value', 0)}")
+                    print(f"✅ Approved and inserted: {result.get('entries_count', 0)} entries, Total: {result.get('total_value', 0)}")
                 else:
-                    print(f"Approval failed: {result.get('error', 'Unknown error')}")
+                    print(f"❌ Approval failed: {result.get('error', 'Unknown error')}")
 
             except Exception as e:
-                print(f"Approval callback error: {e}")
+                import traceback
+                print(f"❌ Approval callback error: {e}")
+                traceback.print_exc()
         else:
-            # No callback - just approve
+            # No callback - just approve without inserting
+            print(f"[APPROVE] ⚠️ NO CALLBACK SET! on_approve_callback is None")
+            print(f"[APPROVE] ⚠️ Entry will be marked approved but NOT inserted into database!")
+            print(f"[APPROVE] ⚠️ Make sure to restart the GUI application!")
             self.server.approve_entry(self.selected_entry_id)
             self._refresh_entries_list()
             self._clear_selection()
@@ -485,63 +598,169 @@ class WhatsAppGUIPanel:
 def create_approval_callback(db_manager, parser, calc_engine):
     """
     Create approval callback that processes WhatsApp entries
-    and inserts them into the main database.
+    and inserts them into the main database using existing pipelines.
     """
+
+    print(f"\n{'='*60}")
+    print(f"[CALLBACK FACTORY] Creating approval callback")
+    print(f"[CALLBACK FACTORY] db_manager: {db_manager}")
+    print(f"[CALLBACK FACTORY] parser: {parser}")
+    print(f"[CALLBACK FACTORY] calc_engine: {calc_engine}")
+    print(f"{'='*60}\n")
 
     def approve_and_insert(content: str, customer_name: str, bazar: str,
                            source_entry: PendingEntry) -> Dict[str, Any]:
-        """Process approved WhatsApp entry and insert into database"""
+        """Process approved WhatsApp entry and insert into database using existing pipelines"""
+        print(f"\n{'='*60}")
+        print(f"[APPROVE_INSERT] >>> CALLBACK INVOKED <<<")
+        print(f"[APPROVE_INSERT] Content length: {len(content)}")
+        print(f"[APPROVE_INSERT] Content: {content[:100]}...")
+        print(f"[APPROVE_INSERT] Customer: '{customer_name}'")
+        print(f"[APPROVE_INSERT] Bazar: '{bazar}'")
+        print(f"[APPROVE_INSERT] Source sender: {source_entry.sender_name}")
+        print(f"{'='*60}")
+
         try:
             from ..business.calculation_engine import CalculationContext
             from datetime import date
 
-            # Parse the content
-            parsed_result = parser.parse(content)
+            # Step 1: Validate customer name
+            print(f"\n[STEP 1] Validating customer name...")
+            if not customer_name or not customer_name.strip():
+                customer_name = source_entry.sender_name
+                print(f"[STEP 1] Using sender name as customer: {customer_name}")
+                if not customer_name or not customer_name.strip():
+                    print(f"[STEP 1] ERROR: No customer name available!")
+                    return {'success': False, 'error': 'Customer name is required'}
+            customer_name = customer_name.strip()
+            print(f"[STEP 1] Final customer name: '{customer_name}'")
+
+            # Step 2: Validate bazar
+            print(f"\n[STEP 2] Validating bazar...")
+            if not bazar or not bazar.strip():
+                try:
+                    bazars = db_manager.get_all_bazars()
+                    print(f"[STEP 2] Available bazars: {[b['name'] for b in bazars]}")
+                    if bazars:
+                        bazar = bazars[0]["name"]
+                    else:
+                        bazar = "T.O"  # Default to T.O
+                except Exception as e:
+                    print(f"[STEP 2] Error getting bazars: {e}")
+                    bazar = "T.O"
+            bazar = bazar.strip()
+            print(f"[STEP 2] Final bazar: '{bazar}'")
+
+            # Step 3: Parse the content using existing parser pipeline
+            print(f"\n[STEP 3] Parsing content with MixedInputParser...")
+            print(f"[STEP 3] Parser type: {type(parser)}")
+            try:
+                parsed_result = parser.parse(content)
+                print(f"[STEP 3] Parse complete. is_empty: {parsed_result.is_empty}")
+                print(f"[STEP 3] pana_entries: {len(parsed_result.pana_entries or [])}")
+                print(f"[STEP 3] type_entries: {len(parsed_result.type_entries or [])}")
+                print(f"[STEP 3] time_entries: {len(parsed_result.time_entries or [])}")
+                print(f"[STEP 3] jodi_entries: {len(getattr(parsed_result, 'jodi_entries', []) or [])}")
+                print(f"[STEP 3] family_pana_entries: {len(getattr(parsed_result, 'family_pana_entries', []) or [])}")
+            except Exception as parse_err:
+                print(f"[STEP 3] PARSE ERROR: {parse_err}")
+                import traceback
+                traceback.print_exc()
+                return {'success': False, 'error': f'Parse error: {parse_err}'}
 
             if parsed_result.is_empty:
+                print(f"[STEP 3] ERROR: No valid entries found in parsed result!")
                 return {'success': False, 'error': 'No valid entries found'}
 
-            # Get or create customer
-            customer = db_manager.get_customer_by_name(customer_name)
-            if customer:
-                customer_id = customer['id']
-            else:
-                customer_id = db_manager.add_customer(customer_name)
+            # Step 4: Get or create customer
+            print(f"\n[STEP 4] Getting/creating customer...")
+            try:
+                customer = db_manager.get_customer_by_name(customer_name)
+                if customer:
+                    customer_id = customer['id']
+                    print(f"[STEP 4] Found existing customer ID: {customer_id}")
+                else:
+                    print(f"[STEP 4] Creating new customer: {customer_name}")
+                    customer_id = db_manager.add_customer(customer_name)
+                    print(f"[STEP 4] Created customer with ID: {customer_id}")
+            except Exception as cust_err:
+                print(f"[STEP 4] CUSTOMER ERROR: {cust_err}")
+                import traceback
+                traceback.print_exc()
+                return {'success': False, 'error': f'Customer error: {cust_err}'}
 
-            # Create calculation context
+            # Step 5: Create calculation context
+            print(f"\n[STEP 5] Creating calculation context...")
+            entry_date = date.today()
+            print(f"[STEP 5] Entry date: {entry_date}")
             calc_context = CalculationContext(
                 customer_id=customer_id,
                 customer_name=customer_name,
-                entry_date=date.today(),
+                entry_date=entry_date,
                 bazar=bazar,
                 source_data=parsed_result
             )
+            print(f"[STEP 5] Context created successfully")
 
-            # Calculate business totals
-            business_calc = calc_engine.calculate(calc_context)
+            # Step 6: Calculate business totals using existing CalculationEngine
+            print(f"\n[STEP 6] Calculating business totals...")
+            print(f"[STEP 6] Calc engine type: {type(calc_engine)}")
+            try:
+                business_calc = calc_engine.calculate(calc_context)
+                print(f"[STEP 6] Calculation complete!")
+                print(f"[STEP 6] Grand total: {business_calc.grand_total}")
+                print(f"[STEP 6] Universal entries count: {len(business_calc.universal_entries)}")
+            except Exception as calc_err:
+                print(f"[STEP 6] CALCULATION ERROR: {calc_err}")
+                import traceback
+                traceback.print_exc()
+                return {'success': False, 'error': f'Calculation error: {calc_err}'}
 
-            # Save universal log entries to database
+            # Step 7: Save universal log entries to database
+            print(f"\n[STEP 7] Saving to database...")
             total_entries = 0
-            for entry in business_calc.universal_entries:
-                db_manager.add_universal_log_entry({
-                    'customer_id': entry.customer_id,
-                    'customer_name': entry.customer_name,
-                    'entry_date': entry.entry_date,
-                    'bazar': entry.bazar,
-                    'number': entry.number,
-                    'value': entry.value,
-                    'entry_type': entry.entry_type.value,
-                    'source_line': f"[WhatsApp: {source_entry.sender_name}] {entry.source_line}"
-                })
-                total_entries += 1
+            for i, entry in enumerate(business_calc.universal_entries):
+                try:
+                    entry_data = {
+                        'customer_id': entry.customer_id,
+                        'customer_name': entry.customer_name,
+                        'entry_date': entry.entry_date,
+                        'bazar': entry.bazar,
+                        'number': entry.number,
+                        'value': entry.value,
+                        'entry_type': entry.entry_type.value,
+                        'source_line': f"[WhatsApp: {source_entry.sender_name}] {entry.source_line}"
+                    }
+                    if i < 3:  # Log first 3 entries
+                        print(f"[STEP 7] Entry {i+1}: number={entry.number}, value={entry.value}, type={entry.entry_type.value}")
 
-            return {
+                    new_id = db_manager.add_universal_log_entry(entry_data)
+                    total_entries += 1
+
+                    if i < 3:
+                        print(f"[STEP 7] Entry {i+1} saved with ID: {new_id}")
+
+                except Exception as db_err:
+                    print(f"[STEP 7] DB ERROR on entry {i+1}: {db_err}")
+                    import traceback
+                    traceback.print_exc()
+
+            print(f"\n[STEP 7] Total entries saved: {total_entries}/{len(business_calc.universal_entries)}")
+
+            result = {
                 'success': True,
                 'entries_count': total_entries,
                 'total_value': business_calc.grand_total
             }
+            print(f"\n{'='*60}")
+            print(f"[APPROVE_INSERT] SUCCESS! Result: {result}")
+            print(f"{'='*60}\n")
+            return result
 
         except Exception as e:
+            print(f"\n[APPROVE_INSERT] EXCEPTION: {e}")
+            import traceback
+            traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
     return approve_and_insert

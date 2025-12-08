@@ -21,7 +21,7 @@ class BootReceiver : BroadcastReceiver() {
 
             if (settingsManager.isServiceEnabled()) {
                 Log.d(TAG, "Reactivating notification service")
-                NotificationService.setActive(true)
+                NotificationService.setActive(context, true)
             }
         }
     }

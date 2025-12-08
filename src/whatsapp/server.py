@@ -138,9 +138,9 @@ class WhatsAppRequestHandler(BaseHTTPRequestHandler):
         total_value = 0
         entry_count = 0
 
-        if self.parser_callback:
+        if WhatsAppRequestHandler.parser_callback:
             try:
-                parse_result = self.parser_callback(data['message'])
+                parse_result = WhatsAppRequestHandler.parser_callback(data['message'])
                 if parse_result:
                     parsed_preview = parse_result.get('preview', '')
                     total_value = parse_result.get('total_value', 0)
@@ -171,9 +171,9 @@ class WhatsAppRequestHandler(BaseHTTPRequestHandler):
             entry_id = self.pending_queue.add_entry(entry)
 
             # Notify callback
-            if self.on_message_callback:
+            if WhatsAppRequestHandler.on_message_callback:
                 try:
-                    self.on_message_callback(entry)
+                    WhatsAppRequestHandler.on_message_callback(entry)
                 except Exception as e:
                     print(f"Callback error: {e}")
 
@@ -210,9 +210,9 @@ class WhatsAppRequestHandler(BaseHTTPRequestHandler):
                 total_value = 0
                 entry_count = 0
 
-                if self.parser_callback:
+                if WhatsAppRequestHandler.parser_callback:
                     try:
-                        parse_result = self.parser_callback(msg.get('message', ''))
+                        parse_result = WhatsAppRequestHandler.parser_callback(msg.get('message', ''))
                         if parse_result:
                             parsed_preview = parse_result.get('preview', '')
                             total_value = parse_result.get('total_value', 0)

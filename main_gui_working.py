@@ -19,10 +19,66 @@ bazars = []
 db_manager = None
 config_manager = None
 input_area_focused = False  # Track if input area is focused
+whatsapp_panel = None  # WhatsApp integration panel
+
+def open_whatsapp_panel():
+    """Open WhatsApp integration panel"""
+    global whatsapp_panel, db_manager
+
+    print(f"\n{'='*50}")
+    print("[WHATSAPP] Opening WhatsApp panel...")
+    print(f"{'='*50}")
+
+    try:
+        from src.whatsapp.gui_integration import WhatsAppGUIPanel, create_approval_callback
+        from src.parsing.parser_adapter import MixedInputParser, TypeTableLoader
+        from src.business.calculation_engine import CalculationEngine
+
+        # Create parser and calc engine for approval workflow
+        print("[WHATSAPP] Creating parser and calc engine...")
+        parser = MixedInputParser()
+        try:
+            table_loader = TypeTableLoader(db_manager)
+            sp_table, dp_table, cp_table = table_loader.load_all_tables()
+            family_pana_table = table_loader.load_family_pana_table()
+            calc_engine = CalculationEngine(sp_table, dp_table, cp_table, family_pana_table)
+            print("[WHATSAPP] ✅ Tables loaded successfully")
+        except Exception as e:
+            print(f"[WHATSAPP] ⚠️ Table loading error: {e}")
+            calc_engine = CalculationEngine()
+
+        # Create approval callback that inserts into database
+        approval_callback = create_approval_callback(db_manager, parser, calc_engine)
+        print(f"[WHATSAPP] ✅ Approval callback created: {approval_callback}")
+
+        if whatsapp_panel is None:
+            # Create panel with approval callback
+            whatsapp_panel = WhatsAppGUIPanel(db_manager, on_approve_callback=approval_callback)
+            print(f"[WHATSAPP] ✅ NEW panel created with callback")
+            print(f"[WHATSAPP] Panel callback: {whatsapp_panel.on_approve_callback}")
+        else:
+            # Ensure callback is set even if panel already exists
+            print(f"[WHATSAPP] Panel already exists, updating callback...")
+            print(f"[WHATSAPP] Old callback: {whatsapp_panel.on_approve_callback}")
+            whatsapp_panel.on_approve_callback = approval_callback
+            print(f"[WHATSAPP] New callback: {whatsapp_panel.on_approve_callback}")
+
+        whatsapp_panel.create_panel()
+        dpg.set_value("status_text", "WhatsApp panel opened")
+        print(f"[WHATSAPP] ✅ Panel opened successfully")
+        print(f"{'='*50}\n")
+    except ImportError as e:
+        print(f"[WHATSAPP] ❌ Import error: {e}")
+        dpg.set_value("status_text", f"WhatsApp module not found: {e}")
+    except Exception as e:
+        import traceback
+        print(f"[WHATSAPP] ❌ Error: {e}")
+        traceback.print_exc()
+        dpg.set_value("status_text", f"WhatsApp error: {e}")
 
 def create_working_main_gui():
     """Create a working main GUI with all features"""
-    global customers, bazars, db_manager, config_manager, input_area_focused
+    global customers, bazars, db_manager, config_manager, input_area_focused, whatsapp_panel
     
     # Initialize database and config
     try:
@@ -2917,6 +2973,8 @@ def create_working_main_gui():
             # Compact action buttons
             dpg.add_button(label="+User", callback=add_customer, width=50)
             dpg.add_button(label="+Bazar", callback=add_bazar, width=55)
+            dpg.add_spacer(width=20)
+            dpg.add_button(label="WhatsApp", callback=open_whatsapp_panel, width=70)
         
         
         # Hidden date picker popup
@@ -3164,11 +3222,15 @@ def main():
             time.sleep(0.016)  # ~60 FPS
         
         print("🛑 GUI closed by user")
-        
+
         # Cleanup
+        if whatsapp_panel:
+            whatsapp_panel.stop_server()
+            print("📱 WhatsApp server stopped")
+
         if db_manager:
             db_manager.close()
-        
+
         dpg.destroy_context()
         print("✅ Cleanup completed")
         
